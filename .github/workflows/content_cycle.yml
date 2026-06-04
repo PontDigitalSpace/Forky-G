@@ -1,0 +1,63 @@
+name: Forky G — Monthly Content Cycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      client:
+        description: 'Client name'
+        required: true
+        default: 'la_medusa'
+        type: choice
+        options:
+          - la_medusa
+          - scholeia
+          - studies_quebec
+          - bimpro
+          - la_bruja
+          - el_kapricho
+      month:
+        description: 'Month (e.g. junio_2026)'
+        required: true
+        default: 'junio_2026'
+  schedule:
+    # Runs on the 1st of every month at 9am EST
+    - cron: '0 14 1 * *'
+
+jobs:
+  run-content-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests google-auth google-auth-oauthlib google-api-python-client
+
+      - name: Run Forky G content cycle
+        env:
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          HIGGSFIELD_API_KEY: ${{ secrets.HIGGSFIELD_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          DESCRIPT_API_KEY:   ${{ secrets.DESCRIPT_API_KEY }}
+          GDRIVE_FOLDER_ID:   ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          cd src
+          python forky_g.py \
+            --client "${{ github.event.inputs.client || 'la_medusa' }}" \
+            --month  "${{ github.event.inputs.month  || 'julio_2026' }}"
+
+      - name: Upload output artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: forky-g-output-${{ github.run_id }}
+          path: output/
+          retention-days: 30
