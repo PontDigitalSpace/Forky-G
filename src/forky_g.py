@@ -11,19 +11,19 @@ import argparse
 import requests
 from pathlib import Path
 from higgsfield_client import HiggsFieldClient
-from elevenlabs_client import ElevenLabsClient
+from openai_tts_client import OpenAITTSClient
 from descript_client import DescriptClient
 
 # ── API Keys (set as GitHub Secrets / env vars) ──────────────────────────────
 ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
 HIGGSFIELD_API_KEY = os.environ["HIGGSFIELD_API_KEY"]
-ELEVENLABS_API_KEY = os.environ["ELEVENLABS_API_KEY"]
+OPENAI_API_KEY     = os.environ["OPENAI_API_KEY"]
 DESCRIPT_API_KEY   = os.environ["DESCRIPT_API_KEY"]
 GDRIVE_FOLDER_ID   = os.environ.get("GDRIVE_FOLDER_ID", "")
 
 # ── Clients ───────────────────────────────────────────────────────────────────
 higgsfield  = HiggsFieldClient(HIGGSFIELD_API_KEY)
-elevenlabs  = ElevenLabsClient(ELEVENLABS_API_KEY)
+tts         = OpenAITTSClient(OPENAI_API_KEY)
 descript    = DescriptClient(DESCRIPT_API_KEY)
 
 # ── Posts configuration for La Medusa Junio 2026 ─────────────────────────────
@@ -210,13 +210,13 @@ def process_reel(post: dict, output_dir: Path):
         )
         higgsfield.download_result(job, str(video_path))
 
-    # 2. Voice over in French
+    # 2. Voice over (FR primary; EN/ES keys also supported via lang param)
     if post.get("voiceover_fr"):
         print(f"  🎙️ Generating French voice over...")
-        elevenlabs.generate_voiceover(
+        tts.generate_voiceover(
             text=post["voiceover_fr"],
             output_path=str(audio_path),
-            voice="charlotte"
+            lang="fr"
         )
 
     # 3. Upload to Descript
