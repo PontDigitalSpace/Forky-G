@@ -12,7 +12,7 @@ BASE_URL = "https://platform.higgsfield.ai"
 IMAGE_MODEL = "higgsfield-ai/soul/standard"
 
 # Video models (text-to-video via image intermediary)
-VIDEO_MODEL = "higgsfield-ai/dop/preview"
+VIDEO_MODEL = "higgsfield-ai/dop/standard"
 
 
 class HiggsFieldClient:

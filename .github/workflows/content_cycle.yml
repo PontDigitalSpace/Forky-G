@@ -63,19 +63,25 @@ jobs:
       - name: Upload to Google Drive
         if: always()
         env:
-          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+          RCLONE_CONFIG: ${{ secrets.RCLONE_CONFIG }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
           mkdir -p ~/.config/rclone
-          echo "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          printf '%s' "$RCLONE_CONFIG" > ~/.config/rclone/rclone.conf
           CLIENT="${{ github.event.inputs.client || 'la_medusa' }}"
           MONTH="${{ github.event.inputs.month || 'julio_2026' }}"
-          FOLDER_ID="${{ secrets.GDRIVE_FOLDER_ID }}"
-          # Convert client name to display name
           CLIENT_DISPLAY=$(echo "$CLIENT" | sed 's/_/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
-          rclone copy "output/$CLIENT/$MONTH/" \
-            "gdrive:/$CLIENT_DISPLAY/$MONTH/" \
-            --drive-root-folder-id "$FOLDER_ID" \
-            --progress || true
+          OUTPUT_DIR="output/$CLIENT/$MONTH"
+          if [ -d "$OUTPUT_DIR" ] && [ "$(ls -A $OUTPUT_DIR)" ]; then
+            echo "Uploading $OUTPUT_DIR to Drive..."
+            rclone copy "$OUTPUT_DIR" \
+              "gdrive:/$CLIENT_DISPLAY/$MONTH/" \
+              --drive-root-folder-id "$GDRIVE_FOLDER_ID" \
+              --transfers 4 \
+              --progress
+          else
+            echo "No output files to upload"
+          fi
 
       - name: Upload output artifacts
         uses: actions/upload-artifact@v4

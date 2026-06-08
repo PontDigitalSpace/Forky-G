@@ -205,7 +205,7 @@ def process_reel(post: dict, output_dir: Path):
             print(f"  🎬 Animating image to video...")
             vid_job = higgsfield.generate_video(
                 prompt=prompt,
-                model="higgsfield-ai/dop/preview",
+                model="higgsfield-ai/dop/standard",
                 start_image_url=image_url,
                 duration=5
             )
@@ -220,7 +220,7 @@ def process_reel(post: dict, output_dir: Path):
         print(f"  🎬 Animating to video...")
         vid_job = higgsfield.generate_video(
             prompt=prompt,
-            model="higgsfield-ai/dop/preview",
+            model="higgsfield-ai/dop/standard",
             start_image_url=image_url,
             duration=5
         )
