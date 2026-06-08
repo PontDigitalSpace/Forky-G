@@ -1,62 +1,72 @@
 """
-Higgsfield API Client — Image & Video Generation (Veo 3.1)
+Higgsfield API Client — Image & Video Generation
+Base URL: https://platform.higgsfield.ai
+Auth: Key {api_key}:{api_key_secret}  (format: uuid:uuid separated by colon)
 """
 import requests
 import time
 
-BASE_URL = "https://api.higgsfield.ai"
+BASE_URL = "https://platform.higgsfield.ai"
+
+# Image model
+IMAGE_MODEL = "higgsfield-ai/soul/standard"
+
+# Video models (text-to-video via image intermediary)
+VIDEO_MODEL = "higgsfield-ai/dop/preview"
+
 
 class HiggsFieldClient:
     def __init__(self, api_key: str):
+        # api_key format: "uuid" or "uuid:uuid" — both supported
         self.api_key = api_key
         self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+            "Authorization": f"Key {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
         }
 
-    def generate_image(self, prompt: str, model: str = "nano_banana_pro",
+    def generate_image(self, prompt: str, model: str = IMAGE_MODEL,
                        aspect_ratio: str = "1:1", count: int = 1) -> dict:
         response = requests.post(
-            f"{BASE_URL}/v1/images/generations",
+            f"{BASE_URL}/{model}",
             headers=self.headers,
-            json={"model": model, "prompt": prompt,
-                  "aspect_ratio": aspect_ratio, "count": count}
+            json={"prompt": prompt, "aspect_ratio": aspect_ratio},
+            timeout=30
         )
         response.raise_for_status()
-        return self._poll_job(response.json()["id"])
+        request_id = response.json().get("request_id") or response.json().get("id")
+        return self._poll_request(request_id, timeout=120)
 
-    def generate_video(self, prompt: str, model: str = "veo3_1_lite",
-                       aspect_ratio: str = "9:16", duration: int = 8,
+    def generate_video(self, prompt: str, model: str = VIDEO_MODEL,
+                       aspect_ratio: str = "9:16", duration: int = 5,
                        start_image_url: str = None) -> dict:
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "aspect_ratio": aspect_ratio,
-            "duration": duration,
-        }
+        payload = {"prompt": prompt, "duration": duration}
         if start_image_url:
-            payload["medias"] = [{"value": start_image_url, "role": "start_image"}]
+            payload["image_url"] = start_image_url
         response = requests.post(
-            f"{BASE_URL}/v1/videos/generations",
+            f"{BASE_URL}/{model}",
             headers=self.headers,
-            json=payload
+            json=payload,
+            timeout=30
         )
         response.raise_for_status()
-        return self._poll_job(response.json()["id"], timeout=300)
-
-    def upload_image(self, image_path: str) -> str:
-        with open(image_path, "rb") as f:
-            response = requests.post(
-                f"{BASE_URL}/v1/media/upload",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                files={"file": f}
-            )
-        response.raise_for_status()
-        return response.json()["id"]
+        request_id = response.json().get("request_id") or response.json().get("id")
+        return self._poll_request(request_id, timeout=300)
 
     def download_result(self, job: dict, output_path: str) -> str:
-        url = job.get("results", [{}])[0].get("url")
-        response = requests.get(url, stream=True)
+        # Try images array first, then video object
+        url = None
+        if job.get("images"):
+            url = job["images"][0].get("url") or job["images"][0]
+        elif job.get("video"):
+            url = job["video"].get("url") or job["video"]
+        elif job.get("results"):
+            url = job["results"][0].get("url")
+
+        if not url:
+            raise Exception(f"No download URL in job result: {job}")
+
+        response = requests.get(url, stream=True, timeout=60)
         response.raise_for_status()
         with open(output_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
@@ -64,18 +74,22 @@ class HiggsFieldClient:
         print(f"  ✅ Downloaded to {output_path}")
         return output_path
 
-    def _poll_job(self, job_id: str, timeout: int = 120, interval: int = 5) -> dict:
+    def _poll_request(self, request_id: str, timeout: int = 120, interval: int = 5) -> dict:
         elapsed = 0
         while elapsed < timeout:
-            r = requests.get(f"{BASE_URL}/v1/jobs/{job_id}", headers=self.headers)
+            r = requests.get(
+                f"{BASE_URL}/requests/{request_id}/status",
+                headers=self.headers,
+                timeout=15
+            )
             r.raise_for_status()
             job = r.json()
             status = job.get("status")
             if status == "completed":
                 return job
-            elif status == "failed":
-                raise Exception(f"Job failed: {job.get('error')}")
-            print(f"  ⏳ {job_id}: {status} ({elapsed}s)")
+            elif status in ("failed", "cancelled"):
+                raise Exception(f"Request {status}: {job.get('error') or job}")
+            print(f"  ⏳ {request_id[:8]}...: {status} ({elapsed}s)")
             time.sleep(interval)
             elapsed += interval
-        raise TimeoutError(f"Job {job_id} timed out")
+        raise TimeoutError(f"Request {request_id} timed out after {timeout}s")
