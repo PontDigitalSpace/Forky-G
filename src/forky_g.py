@@ -187,7 +187,7 @@ def process_reel(post: dict, output_dir: Path):
     audio_path  = post_dir / "voiceover_fr.mp3"
     final_path  = post_dir / "final.mp4"
 
-    # 1. Video
+    # 1. Video — generate image first, then animate it
     if post.get("usa_video_real") and post.get("video_source"):
         src = Path("videos") / post["video_source"]
         if src.exists():
@@ -195,19 +195,37 @@ def process_reel(post: dict, output_dir: Path):
             shutil.copy(src, video_path)
             print(f"  ✅ Using real video: {post['video_source']}")
         else:
-            print(f"  ⚠️ Real video not found: {src} — generating with Veo 3.1")
-            job = higgsfield.generate_video(
-                prompt=post.get("video_prompt", post["titulo"]),
-                model="veo3_1_lite", aspect_ratio="9:16", duration=8
+            print(f"  ⚠️ Real video not found — generating AI video...")
+            prompt = post.get("video_prompt", post["titulo"])
+            # Step 1: generate image
+            img_path = post_dir / "frame.jpg"
+            print(f"  🎨 Generating base image...")
+            img_job = higgsfield.generate_image(prompt=prompt, aspect_ratio="9:16")
+            higgsfield.download_result(img_job, str(img_path))
+            # Step 2: animate image to video
+            print(f"  🎬 Animating image to video...")
+            vid_job = higgsfield.generate_video(
+                prompt=prompt,
+                model="higgsfield-ai/dop/preview",
+                start_image_url=None,
+                duration=5
             )
-            higgsfield.download_result(job, str(video_path))
+            higgsfield.download_result(vid_job, str(video_path))
     else:
-        print(f"  🤖 Generating video with Veo 3.1 Lite...")
-        job = higgsfield.generate_video(
-            prompt=post["video_prompt"],
-            model="veo3_1_lite", aspect_ratio="9:16", duration=8
+        prompt = post["video_prompt"]
+        # Step 1: generate image
+        img_path = post_dir / "frame.jpg"
+        print(f"  🎨 Generating base image...")
+        img_job = higgsfield.generate_image(prompt=prompt, aspect_ratio="9:16")
+        higgsfield.download_result(img_job, str(img_path))
+        # Step 2: animate to video
+        print(f"  🎬 Animating to video...")
+        vid_job = higgsfield.generate_video(
+            prompt=prompt,
+            model="higgsfield-ai/dop/preview",
+            duration=5
         )
-        higgsfield.download_result(job, str(video_path))
+        higgsfield.download_result(vid_job, str(video_path))
 
     # 2. Voice over (FR primary; EN/ES also supported via lang param)
     if post.get("voiceover_fr"):
@@ -240,7 +258,6 @@ def process_images(post: dict, output_dir: Path):
         print(f"  🎨 Generating image {i+1}/{len(prompts)}...")
         job = higgsfield.generate_image(
             prompt=f"Italian restaurant Montreal La Medusa, {prompt}, professional photography, warm elegant lighting",
-            model="nano_banana_pro",
             aspect_ratio="1:1"
         )
         higgsfield.download_result(job, str(post_dir / f"slide_{i+1:02d}.jpg"))
