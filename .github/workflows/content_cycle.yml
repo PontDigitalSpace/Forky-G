@@ -44,22 +44,18 @@ jobs:
 
       - name: Install brand fonts
         run: |
-          sudo apt-get install -y --fix-missing fontconfig wget unzip
+          sudo apt-get install -y --fix-missing fontconfig wget unzip || true
           mkdir -p /usr/share/fonts/forky
 
-          # Marcellus (Google Fonts)
-          wget -q "https://fonts.google.com/download?family=Marcellus" -O /tmp/marcellus.zip
-          unzip -q /tmp/marcellus.zip -d /tmp/marcellus
-          cp /tmp/marcellus/*.ttf /usr/share/fonts/forky/ 2>/dev/null || true
+          # Download fonts directly from GitHub mirrors (more reliable than Google Fonts API)
+          BASE="https://raw.githubusercontent.com/google/fonts/main/ofl"
 
-          # Libre Baskerville (Google Fonts)
-          wget -q "https://fonts.google.com/download?family=Libre+Baskerville" -O /tmp/baskerville.zip
-          unzip -q /tmp/baskerville.zip -d /tmp/baskerville
-          cp /tmp/baskerville/*.ttf /usr/share/fonts/forky/ 2>/dev/null || true
+          wget -q "$BASE/marcellus/Marcellus-Regular.ttf" -O /usr/share/fonts/forky/Marcellus-Regular.ttf || true
+          wget -q "$BASE/librebaskerville/LibreBaskerville-Regular.ttf" -O /usr/share/fonts/forky/LibreBaskerville-Regular.ttf || true
+          wget -q "$BASE/librebaskerville/LibreBaskerville-Bold.ttf" -O /usr/share/fonts/forky/LibreBaskerville-Bold.ttf || true
 
-          fc-cache -f -v /usr/share/fonts/forky
-          echo "Fonts installed:"
-          ls /usr/share/fonts/forky/
+          fc-cache -f /usr/share/fonts/forky 2>/dev/null || true
+          echo "Fonts installed: $(ls /usr/share/fonts/forky/ 2>/dev/null | wc -l) files"
 
       - name: Install Python dependencies
         run: pip install requests Pillow
