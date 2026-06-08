@@ -59,6 +59,8 @@ jobs:
           python forky_g.py \
             --client "${{ github.event.inputs.client || 'la_medusa' }}" \
             --month  "${{ github.event.inputs.month  || 'julio_2026' }}"
+          echo "Output contents:"
+          find ../output -type f 2>/dev/null | head -30 || echo "No output directory found"
 
       - name: Upload to Google Drive
         if: always()
@@ -71,7 +73,7 @@ jobs:
           CLIENT="${{ github.event.inputs.client || 'la_medusa' }}"
           MONTH="${{ github.event.inputs.month || 'julio_2026' }}"
           CLIENT_DISPLAY=$(echo "$CLIENT" | sed 's/_/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
-          OUTPUT_DIR="output/$CLIENT/$MONTH"
+          OUTPUT_DIR="src/output/$CLIENT/$MONTH"
           if [ -d "$OUTPUT_DIR" ] && [ "$(ls -A $OUTPUT_DIR)" ]; then
             echo "Uploading $OUTPUT_DIR to Drive..."
             rclone copy "$OUTPUT_DIR" \
@@ -88,5 +90,5 @@ jobs:
         if: always()
         with:
           name: forky-g-output-${{ github.run_id }}
-          path: output/
+          path: src/output/
           retention-days: 30
