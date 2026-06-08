@@ -187,7 +187,7 @@ def process_reel(post: dict, output_dir: Path):
     audio_path  = post_dir / "voiceover_fr.mp3"
     final_path  = post_dir / "final.mp4"
 
-    # 1. Video — generate image first, then animate it
+    # 1. Video — generate image first, then animate using its URL
     if post.get("usa_video_real") and post.get("video_source"):
         src = Path("videos") / post["video_source"]
         if src.exists():
@@ -197,32 +197,31 @@ def process_reel(post: dict, output_dir: Path):
         else:
             print(f"  ⚠️ Real video not found — generating AI video...")
             prompt = post.get("video_prompt", post["titulo"])
-            # Step 1: generate image
             img_path = post_dir / "frame.jpg"
             print(f"  🎨 Generating base image...")
             img_job = higgsfield.generate_image(prompt=prompt, aspect_ratio="9:16")
+            image_url = higgsfield.get_result_url(img_job)
             higgsfield.download_result(img_job, str(img_path))
-            # Step 2: animate image to video
             print(f"  🎬 Animating image to video...")
             vid_job = higgsfield.generate_video(
                 prompt=prompt,
                 model="higgsfield-ai/dop/preview",
-                start_image_url=None,
+                start_image_url=image_url,
                 duration=5
             )
             higgsfield.download_result(vid_job, str(video_path))
     else:
         prompt = post["video_prompt"]
-        # Step 1: generate image
         img_path = post_dir / "frame.jpg"
         print(f"  🎨 Generating base image...")
         img_job = higgsfield.generate_image(prompt=prompt, aspect_ratio="9:16")
+        image_url = higgsfield.get_result_url(img_job)
         higgsfield.download_result(img_job, str(img_path))
-        # Step 2: animate to video
         print(f"  🎬 Animating to video...")
         vid_job = higgsfield.generate_video(
             prompt=prompt,
             model="higgsfield-ai/dop/preview",
+            start_image_url=image_url,
             duration=5
         )
         higgsfield.download_result(vid_job, str(video_path))

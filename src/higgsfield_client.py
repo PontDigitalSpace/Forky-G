@@ -53,6 +53,16 @@ class HiggsFieldClient:
         request_id = response.json().get("request_id") or response.json().get("id")
         return self._poll_request(request_id, timeout=300)
 
+    def get_result_url(self, job: dict) -> str:
+        """Extract the public URL from a completed job result."""
+        if job.get("images"):
+            return job["images"][0].get("url") or job["images"][0]
+        elif job.get("video"):
+            return job["video"].get("url") or job["video"]
+        elif job.get("results"):
+            return job["results"][0].get("url")
+        raise Exception(f"No URL in job result: {job}")
+
     def download_result(self, job: dict, output_path: str) -> str:
         # Try images array first, then video object
         url = None

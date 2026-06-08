@@ -73,7 +73,7 @@ jobs:
           # Convert client name to display name
           CLIENT_DISPLAY=$(echo "$CLIENT" | sed 's/_/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
           rclone copy "output/$CLIENT/$MONTH/" \
-            "gdrive:Forky-G — Contenido IA/$CLIENT_DISPLAY/$MONTH/" \
+            "gdrive:/$CLIENT_DISPLAY/$MONTH/" \
             --drive-root-folder-id "$FOLDER_ID" \
             --progress || true
 
