@@ -61,17 +61,16 @@ try:
 except Exception as e:
     results["OpenAI TTS"] = f"❌ {e}"
 
-# 4. Descript
+# 4. FFmpeg (local binary check)
+import shutil, subprocess
 try:
-    key = os.environ["DESCRIPT_API_KEY"]
-    r = requests.get(
-        "https://api.descript.com/v2/projects",
-        headers={"Authorization": f"Bearer {key}"}
-    )
-    r.raise_for_status()
-    results["Descript"] = "✅ OK"
+    if not shutil.which("ffmpeg"):
+        raise Exception("ffmpeg binary not found")
+    r = subprocess.run(["ffmpeg", "-version"], capture_output=True)
+    version = r.stdout.decode().split("\n")[0]
+    results["FFmpeg"] = f"✅ OK — {version[:40]}"
 except Exception as e:
-    results["Descript"] = f"❌ {e}"
+    results["FFmpeg"] = f"❌ {e}"
 
 print("\n── API Connection Test ──────────────────")
 for name, status in results.items():

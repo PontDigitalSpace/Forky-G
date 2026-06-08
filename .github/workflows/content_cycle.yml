@@ -37,16 +37,18 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install FFmpeg
+        run: sudo apt-get install -y ffmpeg
+
       - name: Install dependencies
         run: |
-          pip install requests google-auth google-auth-oauthlib google-api-python-client
+          pip install requests
 
       - name: Run Forky G content cycle
         env:
           ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
           HIGGSFIELD_API_KEY: ${{ secrets.HIGGSFIELD_API_KEY }}
-          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
-          DESCRIPT_API_KEY:   ${{ secrets.DESCRIPT_API_KEY }}
+          OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
           GDRIVE_FOLDER_ID:   ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
           cd src

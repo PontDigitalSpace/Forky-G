@@ -12,19 +12,17 @@ import requests
 from pathlib import Path
 from higgsfield_client import HiggsFieldClient
 from openai_tts_client import OpenAITTSClient
-from descript_client import DescriptClient
+from video_editor import merge_video_audio
 
 # ── API Keys (set as GitHub Secrets / env vars) ──────────────────────────────
 ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
 HIGGSFIELD_API_KEY = os.environ["HIGGSFIELD_API_KEY"]
 OPENAI_API_KEY     = os.environ["OPENAI_API_KEY"]
-DESCRIPT_API_KEY   = os.environ["DESCRIPT_API_KEY"]
 GDRIVE_FOLDER_ID   = os.environ.get("GDRIVE_FOLDER_ID", "")
 
 # ── Clients ───────────────────────────────────────────────────────────────────
 higgsfield  = HiggsFieldClient(HIGGSFIELD_API_KEY)
 tts         = OpenAITTSClient(OPENAI_API_KEY)
-descript    = DescriptClient(DESCRIPT_API_KEY)
 
 # ── Posts configuration for La Medusa Junio 2026 ─────────────────────────────
 LA_MEDUSA_POSTS = [
@@ -185,8 +183,9 @@ def process_reel(post: dict, output_dir: Path):
     post_dir = output_dir / f"post_{post['id']:02d}"
     post_dir.mkdir(exist_ok=True)
 
-    video_path = post_dir / "video.mp4"
-    audio_path = post_dir / "voiceover_fr.mp3"
+    video_path  = post_dir / "video.mp4"
+    audio_path  = post_dir / "voiceover_fr.mp3"
+    final_path  = post_dir / "final.mp4"
 
     # 1. Video
     if post.get("usa_video_real") and post.get("video_source"):
@@ -210,7 +209,7 @@ def process_reel(post: dict, output_dir: Path):
         )
         higgsfield.download_result(job, str(video_path))
 
-    # 2. Voice over (FR primary; EN/ES keys also supported via lang param)
+    # 2. Voice over (FR primary; EN/ES also supported via lang param)
     if post.get("voiceover_fr"):
         print(f"  🎙️ Generating French voice over...")
         tts.generate_voiceover(
@@ -219,14 +218,15 @@ def process_reel(post: dict, output_dir: Path):
             lang="fr"
         )
 
-    # 3. Upload to Descript
-    print(f"  📤 Uploading to Descript...")
-    project_name = f"La Medusa — Post #{post['id']} — {post['titulo'][:40]}"
-    project = descript.create_project(project_name)
-    descript.upload_media(project["id"], str(video_path))
+    # 3. Merge video + voiceover with FFmpeg (zero quality loss)
+    if video_path.exists() and audio_path.exists():
+        print(f"  🎬 Merging video + voiceover with FFmpeg...")
+        merge_video_audio(str(video_path), str(audio_path), str(final_path))
+    elif video_path.exists():
+        final_path = video_path  # no voiceover, use video as-is
 
-    print(f"  ✅ POST #{post['id']} complete → {post_dir}")
-    return {"post_id": post["id"], "dir": str(post_dir), "descript_project": project["id"]}
+    print(f"  ✅ POST #{post['id']} complete → {final_path}")
+    return {"post_id": post["id"], "dir": str(post_dir), "final": str(final_path)}
 
 def process_images(post: dict, output_dir: Path):
     """Process carousel or static image posts"""
