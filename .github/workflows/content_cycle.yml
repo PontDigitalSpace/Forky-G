@@ -40,6 +40,10 @@ jobs:
       - name: Install FFmpeg
         uses: AnimMouse/setup-ffmpeg@v1
 
+      - name: Install rclone
+        run: |
+          curl https://rclone.org/install.sh | sudo bash
+
       - name: Install dependencies
         run: |
           pip install requests
@@ -55,6 +59,23 @@ jobs:
           python forky_g.py \
             --client "${{ github.event.inputs.client || 'la_medusa' }}" \
             --month  "${{ github.event.inputs.month  || 'julio_2026' }}"
+
+      - name: Upload to Google Drive
+        if: always()
+        env:
+          RCLONE_CONFIG_CONTENT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONFIG_CONTENT" > ~/.config/rclone/rclone.conf
+          CLIENT="${{ github.event.inputs.client || 'la_medusa' }}"
+          MONTH="${{ github.event.inputs.month || 'julio_2026' }}"
+          FOLDER_ID="${{ secrets.GDRIVE_FOLDER_ID }}"
+          # Convert client name to display name
+          CLIENT_DISPLAY=$(echo "$CLIENT" | sed 's/_/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
+          rclone copy "output/$CLIENT/$MONTH/" \
+            "gdrive:Forky-G — Contenido IA/$CLIENT_DISPLAY/$MONTH/" \
+            --drive-root-folder-id "$FOLDER_ID" \
+            --progress || true
 
       - name: Upload output artifacts
         uses: actions/upload-artifact@v4
