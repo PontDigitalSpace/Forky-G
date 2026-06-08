@@ -38,7 +38,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install FFmpeg
-        run: sudo apt-get install -y --fix-missing ffmpeg
+        uses: AnimMouse/setup-ffmpeg@v1
 
       - name: Install dependencies
         run: |
