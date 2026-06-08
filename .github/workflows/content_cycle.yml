@@ -20,7 +20,6 @@ on:
         required: true
         default: 'junio_2026'
   schedule:
-    # Runs on the 1st of every month at 9am EST
     - cron: '0 14 1 * *'
 
 jobs:
@@ -41,46 +40,69 @@ jobs:
         uses: AnimMouse/setup-ffmpeg@v1
 
       - name: Install rclone
-        run: |
-          curl https://rclone.org/install.sh | sudo bash
+        run: curl https://rclone.org/install.sh | sudo bash
 
-      - name: Install dependencies
+      - name: Install brand fonts
         run: |
-          pip install requests
+          sudo apt-get install -y --fix-missing fontconfig wget unzip
+          mkdir -p /usr/share/fonts/forky
 
-      - name: Run Forky G content cycle
+          # Marcellus (Google Fonts)
+          wget -q "https://fonts.google.com/download?family=Marcellus" -O /tmp/marcellus.zip
+          unzip -q /tmp/marcellus.zip -d /tmp/marcellus
+          cp /tmp/marcellus/*.ttf /usr/share/fonts/forky/ 2>/dev/null || true
+
+          # Libre Baskerville (Google Fonts)
+          wget -q "https://fonts.google.com/download?family=Libre+Baskerville" -O /tmp/baskerville.zip
+          unzip -q /tmp/baskerville.zip -d /tmp/baskerville
+          cp /tmp/baskerville/*.ttf /usr/share/fonts/forky/ 2>/dev/null || true
+
+          fc-cache -f -v /usr/share/fonts/forky
+          echo "Fonts installed:"
+          ls /usr/share/fonts/forky/
+
+      - name: Install Python dependencies
+        run: pip install requests Pillow
+
+      - name: Configure rclone
+        env:
+          RCLONE_CONFIG: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          mkdir -p ~/.config/rclone
+          printf '%s' "$RCLONE_CONFIG" > ~/.config/rclone/rclone.conf
+
+      - name: Run Forky-G content cycle
         env:
           ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
           HIGGSFIELD_API_KEY: ${{ secrets.HIGGSFIELD_API_KEY }}
           OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
           GDRIVE_FOLDER_ID:   ${{ secrets.GDRIVE_FOLDER_ID }}
+          FONT_DIR:           /usr/share/fonts/forky
         run: |
           cd src
           python forky_g.py \
             --client "${{ github.event.inputs.client || 'la_medusa' }}" \
-            --month  "${{ github.event.inputs.month  || 'julio_2026' }}"
-          echo "Output contents:"
-          find ../output -type f 2>/dev/null | head -30 || echo "No output directory found"
+            --month  "${{ github.event.inputs.month  || 'junio_2026' }}"
+          echo "Output files:"
+          find output -type f | sort
 
       - name: Upload to Google Drive
         if: always()
         env:
-          RCLONE_CONFIG: ${{ secrets.RCLONE_CONFIG }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
-          mkdir -p ~/.config/rclone
-          printf '%s' "$RCLONE_CONFIG" > ~/.config/rclone/rclone.conf
           CLIENT="${{ github.event.inputs.client || 'la_medusa' }}"
-          MONTH="${{ github.event.inputs.month || 'julio_2026' }}"
+          MONTH="${{ github.event.inputs.month || 'junio_2026' }}"
           CLIENT_DISPLAY=$(echo "$CLIENT" | sed 's/_/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
           OUTPUT_DIR="src/output/$CLIENT/$MONTH"
-          if [ -d "$OUTPUT_DIR" ] && [ "$(ls -A $OUTPUT_DIR)" ]; then
+          if [ -d "$OUTPUT_DIR" ] && [ "$(ls -A $OUTPUT_DIR 2>/dev/null)" ]; then
             echo "Uploading $OUTPUT_DIR to Drive..."
             rclone copy "$OUTPUT_DIR" \
               "gdrive:/$CLIENT_DISPLAY/$MONTH/" \
               --drive-root-folder-id "$GDRIVE_FOLDER_ID" \
               --transfers 4 \
               --progress
+            echo "✅ Upload complete"
           else
             echo "No output files to upload"
           fi
@@ -89,6 +111,6 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: forky-g-output-${{ github.run_id }}
+          name: forky-g-${{ github.event.inputs.client || 'la_medusa' }}-${{ github.run_id }}
           path: src/output/
           retention-days: 30

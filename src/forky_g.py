@@ -1,303 +1,509 @@
-#!/usr/bin/env python3
 """
-Forky G — AI Content Agent for Pont Digital
-Orchestrates the full monthly content cycle via APIs
-Usage: python3 forky_g.py --client "la_medusa" --month "junio_2026"
-"""
+Forky-G — Automated Content Creation Agent
+Pont Digital · github.com/PontDigitalSpace/Forky-G
 
+Cycle:
+  1. Read brand doc + strategy from ClickUp
+  2. Create monthly plan (FASE 3)
+  3. Download real media from Google Drive
+  4. Produce posts (text overlay + voiceover + FFmpeg)
+  5. Upload to Drive
+  6. Schedule in Metricool
+  7. Analyze + report (FASE 6)
+"""
 import os
+import sys
 import json
 import argparse
 import requests
 from pathlib import Path
-from higgsfield_client import HiggsFieldClient
+from datetime import datetime
+
+from drive_downloader import sync_drive_folder, get_images, get_videos
+from post_creator import create_static_post, create_carousel_slide, add_text_overlay_to_video
 from openai_tts_client import OpenAITTSClient
 from video_editor import merge_video_audio
 
-# ── API Keys (set as GitHub Secrets / env vars) ──────────────────────────────
+# ── API Keys ──────────────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
-HIGGSFIELD_API_KEY = os.environ["HIGGSFIELD_API_KEY"]
 OPENAI_API_KEY     = os.environ["OPENAI_API_KEY"]
+HIGGSFIELD_API_KEY = os.environ.get("HIGGSFIELD_API_KEY", "")
 GDRIVE_FOLDER_ID   = os.environ.get("GDRIVE_FOLDER_ID", "")
 
 # ── Clients ───────────────────────────────────────────────────────────────────
-higgsfield  = HiggsFieldClient(HIGGSFIELD_API_KEY)
-tts         = OpenAITTSClient(OPENAI_API_KEY)
+tts = OpenAITTSClient(OPENAI_API_KEY)
 
-# ── Posts configuration for La Medusa Junio 2026 ─────────────────────────────
-LA_MEDUSA_POSTS = [
+# ── Content Plan — La Medusa Junio 2026 ──────────────────────────────────────
+# Loaded from ClickUp documents. Structure follows the Plan Mensual.
+LA_MEDUSA_JUNIO_2026 = [
     {
-        "id": 1, "tipo": "reel", "plataformas": ["instagram", "tiktok", "facebook"],
-        "titulo": "Si tu es à Montréal, tu dois goûter ça",
-        "video_source": "reel_instagram_1.mp4",
-        "voiceover_fr": "Si tu es à Montréal, tu dois goûter ça. Chez La Medusa, chaque plat est préparé à la main. C'est ça, la vraie cuisine italienne.",
-        "usa_video_real": True
+        "id": 1, "date": "2026-06-03", "time": "07:00",
+        "platforms": ["instagram", "tiktok", "facebook"],
+        "format": "reel",
+        "hook": "Si tu es à Montréal, tu dois goûter ça… 🍝",
+        "caption_fr": "Si tu es à Montréal, tu dois goûter ça. 🍝\n\nChez La Medusa, chaque plat est préparé à la main, avec des ingrédients frais et des recettes transmises de génération en génération.\n\nC'est ça, la vraie cuisine italienne.\n\nRéservation en bio. 🔗\n\n#LaMedusaMontreal #RestaurantItalienMontreal #CuisineItalienne #MontrealFoodie #PastaFaite #DowntownMontreal",
+        "media_folder": "fotos_videos",
+        "media_type": "video",
+        "voiceover": False,
+        "pilar": "gastronomia"
     },
     {
-        "id": 4, "tipo": "reel", "plataformas": ["tiktok", "instagram"],
-        "titulo": "Pour nos clients, nous sommes aussi…",
-        "video_prompt": "Elegant Italian restaurant waiter in black uniform stands confidently, warm candlelight, Montreal restaurant, cinematic 9:16 vertical, natural bright lighting",
-        "voiceover_fr": "À La Medusa, notre équipe fait bien plus qu'accueillir nos clients.",
-        "usa_video_real": False
+        "id": 2, "date": "2026-06-06", "time": "07:00",
+        "platforms": ["instagram"],
+        "format": "carousel",
+        "hook": "Ce sont ces petits détails qui font toute la différence.",
+        "slides": [
+            {"text": "Ce sont ces petits détails qui font toute la différence.", "sub": ""},
+            {"text": "Les pâtes, faites à la main.", "sub": ""},
+            {"text": "Le pain, sorti du four.", "sub": ""},
+            {"text": "La lumière, toujours chaleureuse.", "sub": ""},
+            {"text": "L'accueil, toujours sincère.", "sub": ""},
+            {"text": "Depuis 1996, certaines choses n'ont pas changé. 🍷", "sub": "Réservez votre table · lamedusarestaurant.ca", "is_cta": True},
+        ],
+        "caption_fr": "Ce sont ces petits détails qui font toute la différence. 🕯️\n\nLes pâtes faites à la main. Le pain sorti du four. La lumière qui réchauffe la salle. L'accueil qui fait qu'on se sent chez soi.\n\nDepuis 1996, c'est comme ça chez La Medusa.\n\nRéservation en bio. 🔗\n\n#LaMedusaMontreal #CuisineItalienneAuthentique #Depuis1996 #RestaurantItalienMontreal",
+        "media_folder": "fotos_png",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "herencia"
     },
     {
-        "id": 5, "tipo": "reel", "plataformas": ["instagram", "facebook"],
-        "titulo": "Le meilleur cadeau pour la fête des pères",
-        "video_source": "reel_instagram_3.mp4",
-        "voiceover_fr": "Le meilleur cadeau pour la fête des pères? Une vraie soirée italienne chez La Medusa.",
-        "usa_video_real": True
+        "id": 3, "date": "2026-06-07", "time": "13:00",
+        "platforms": ["facebook"],
+        "format": "static",
+        "hook": "Un avis nous a adorés. L'autre… un peu moins.",
+        "caption_fr": "Un avis est tombé amoureux de La Medusa. 🍷\nL'autre… un peu moins convaincu. 👀\n\nMaintenant, on veut l'avis de ceux qui connaissent vraiment :\n\nQui a raison selon toi ? 🔥\n\n#LaMedusaMontreal #RestaurantMontreal #CuisineItalienne",
+        "media_folder": "fotos_png",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "comunidad"
     },
     {
-        "id": 9, "tipo": "reel", "plataformas": ["instagram", "tiktok", "facebook"],
-        "titulo": "Ainsi se prépare une vraie pasta italienne",
-        "video_prompt": "Close up of hands kneading fresh pasta dough in Italian restaurant kitchen, warm golden light, steam rising, artisanal pasta being cut, 9:16 vertical cinematic",
-        "voiceover_fr": "Voilà comment se prépare une vraie pasta italienne chez La Medusa. Fait maison. Toujours.",
-        "usa_video_real": False
+        "id": 4, "date": "2026-06-10", "time": "07:00",
+        "platforms": ["tiktok"],
+        "format": "reel",
+        "hook": "Pour nos clients, nous sommes aussi…",
+        "caption_fr": "À La Medusa, notre équipe fait bien plus qu'accueillir nos clients 😂🍷\n#montreal #foodtok #restaurant #fyp #montrealfood #italianfood",
+        "media_folder": "joe",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "comunidad",
+        "priority": "max"
     },
     {
-        "id": 10, "tipo": "reel", "plataformas": ["tiktok", "instagram"],
-        "titulo": "Si tu cherches une bonne cuisine italienne",
-        "video_source": "reel_instagram_4.mp4",
-        "voiceover_fr": "Si tu cherches une bonne cuisine italienne à Montréal, tu sais déjà où aller. À deux pas du Bell Centre.",
-        "usa_video_real": True
+        "id": 5, "date": "2026-06-12", "time": "07:00",
+        "platforms": ["instagram"],
+        "format": "reel",
+        "hook": "Le meilleur cadeau pour la fête des pères ?",
+        "caption_fr": "Le meilleur cadeau pour la fête des pères ? Une vraie soirée italienne. 🍷\n\nPas besoin de chercher loin — offrez-lui une table à La Medusa, à deux pas du centre-ville de Montréal.\n\nRéservation en bio. Les places partent vite ce week-end. 🔗\n\n#FeteDesPeres #LaMedusaMontreal #RestaurantItalienMontreal #CuisineItalienne",
+        "media_folder": "fotos_videos",
+        "media_type": "video",
+        "voiceover": True,
+        "voiceover_text": "Le meilleur cadeau pour la fête des pères ? Pas un barbecue. Une vraie soirée italienne. Offrez-lui une table à La Medusa.",
+        "pilar": "celebraciones",
+        "priority": "max"
     },
     {
-        "id": 13, "tipo": "reel", "plataformas": ["instagram", "tiktok"],
-        "titulo": "Depuis 1996, certaines choses n'ont pas changé",
-        "video_source": "reel_instagram_4.mp4",
-        "voiceover_fr": "Depuis novembre 1996, certaines choses n'ont pas changé chez La Medusa. Vingt-neuf ans à Montréal. Et ce novembre, on fête les trente.",
-        "usa_video_real": True
+        "id": 6, "date": "2026-06-13", "time": "07:00",
+        "platforms": ["instagram"],
+        "format": "carousel",
+        "hook": "Les plats que vous ne pouvez pas manquer, selon nos chefs.",
+        "slides": [
+            {"text": "Les plats que vous ne pouvez pas manquer, selon nos chefs.", "sub": "", "is_cover": True},
+            {"text": "Osso Buco", "sub": "La spécialité de la maison depuis 1996."},
+            {"text": "Linguine alle Vongole", "sub": "Palourdes fraîches, ail, vin blanc."},
+            {"text": "Veau Marsala", "sub": "Sauce au vin Marsala, champignons."},
+            {"text": "Et toi, lequel choisirais-tu ?", "sub": "Réservez · lamedusarestaurant.ca 🍷", "is_cta": True},
+        ],
+        "caption_fr": "Quand on a demandé à nos chefs quels plats ils recommandaient sans hésiter… voilà ce qu'ils ont dit. 🍝\n\nEt toi, lequel choisirais-tu ? Dis-nous en commentaire 👇\n\nRéservation en bio. 🔗\n\n#LaMedusaMontreal #CuisineItalienneAuthentique #PastaFaite #RestaurantItalienMontreal",
+        "media_folder": "fotos_png",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "gastronomia"
     },
     {
-        "id": 14, "tipo": "reel", "plataformas": ["tiktok"],
-        "titulo": "Montréal s'éveille. Et La Medusa aussi.",
-        "video_prompt": "Montreal summer streets, people on terraces, warm sunny day, cut to elegant Italian restaurant interior with warm lighting and wine glasses, 9:16 vertical",
-        "voiceover_fr": "Montréal s'éveille. Et La Medusa aussi. On vous attend cet été.",
-        "usa_video_real": False
+        "id": 7, "date": "2026-06-14", "time": "09:00",
+        "platforms": ["facebook"],
+        "format": "static",
+        "hook": "Papa mérite mieux qu'un barbecue.",
+        "caption_fr": "Papa mérite mieux qu'un barbecue. 🍷\n\nOffrez-lui une soirée à La Medusa — cuisine italienne authentique, atmosphère chaleureuse, service attentionné.\n\n📍 1218 Rue Drummond, Montréal\n📞 (514) 878-4499\n🔗 lamedusarestaurant.ca\n\n#FeteDesPeres #LaMedusaMontreal #RestaurantMontreal #CuisineItalienne",
+        "media_folder": "fotos_videos",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "celebraciones"
     },
     {
-        "id": 18, "tipo": "reel", "plataformas": ["tiktok"],
-        "titulo": "Ce novembre, La Medusa fête ses 30 ans",
-        "video_prompt": "Elegant Italian restaurant through the years, vintage to modern, warm candlelight, wine glasses clinking, 9:16 vertical emotional cinematic",
-        "voiceover_fr": "Ce novembre, La Medusa fête ses trente ans à Montréal. On a hâte de célébrer avec vous.",
-        "usa_video_real": False
+        "id": 8, "date": "2026-06-15", "time": "08:00",
+        "platforms": ["instagram", "facebook"],
+        "format": "static",
+        "hook": "Bonne fête des pères.",
+        "caption_fr": "Bonne fête des pères. 🍷\n\nÀ tous ceux qui partagent leur table, leur passion et leurs recettes.\n\nLa Medusa · Depuis 1996.\n\n#FeteDesPeres #LaMedusaMontreal #Depuis1996",
+        "media_folder": "fotos_png",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "celebraciones"
     },
     {
-        "id": 2, "tipo": "carousel", "plataformas": ["instagram"],
-        "titulo": "Ce sont ces petits détails qui font toute la différence",
-        "image_prompts": [
-            "Elegant Italian restaurant table with candle and wine glass, dark moody warm lighting, 1:1 square",
-            "Handmade pasta close up, flour dusted, artisanal Italian kitchen, 1:1 square",
-            "Fresh bread from oven, Italian restaurant, warm golden light, 1:1 square",
-            "Warm intimate restaurant interior, soft candlelight, Montreal, 1:1 square",
-            "Warm welcoming restaurant host greeting guests, Italian restaurant, 1:1 square",
-            "Elegant Italian restaurant at night, warm interior glow, 1:1 square"
-        ]
+        "id": 9, "date": "2026-06-17", "time": "07:00",
+        "platforms": ["instagram"],
+        "format": "reel",
+        "hook": "Ainsi se prépare une vraie pasta italienne à La Medusa…",
+        "caption_fr": "Voilà comment se prépare une vraie pasta italienne chez La Medusa. 🍝\n\nDe la farine, des mains, et des années de savoir-faire. Tout est fait maison, comme ça a toujours été depuis 1996.\n\nRéservation en bio. 🔗\n\n#LaMedusaMontreal #PastaFaite #CuisineItalienneAuthentique #FaitMaison #Depuis1996",
+        "media_folder": "fotos_videos",
+        "media_type": "video",
+        "voiceover": True,
+        "voiceover_text": "Voilà comment se prépare une vraie pasta italienne chez La Medusa. De la farine, des mains, et des années de savoir-faire. Fait maison. Toujours.",
+        "pilar": "gastronomia"
     },
     {
-        "id": 6, "tipo": "carousel", "plataformas": ["instagram"],
-        "titulo": "Les plats que vous ne pouvez pas manquer",
-        "image_prompts": [
-            "Elegant handmade pasta dish with rich tomato sauce, fine dining Italian restaurant, dark background, 1:1",
-            "Perfectly plated risotto with truffle, Italian restaurant fine dining, dark elegant background, 1:1",
-            "Fresh seafood pasta, Italian restaurant, elegant plating, dark background, 1:1",
-            "Classic tiramisu dessert, Italian restaurant, elegant presentation, 1:1",
-            "Wine being poured into crystal glass, Italian restaurant, 1:1"
-        ]
+        "id": 10, "date": "2026-06-18", "time": "07:00",
+        "platforms": ["tiktok"],
+        "format": "reel",
+        "hook": "Si tu cherches une bonne cuisine italienne, tu sais déjà où aller.",
+        "caption_fr": "Si tu cherches une bonne cuisine italienne à Montréal, tu sais déjà où aller. 📍\n#montreal #foodtok #italianfood #fyp #montrealfood #restaurant",
+        "media_folder": "fotos_videos",
+        "media_type": "video",
+        "voiceover": False,
+        "pilar": "comunidad",
+        "priority": "max"
     },
     {
-        "id": 7, "tipo": "static", "plataformas": ["facebook"],
-        "titulo": "Papa mérite mieux qu'un barbecue",
-        "image_prompt": "Red wine glass on elegant restaurant table with candle, warm Italian restaurant ambiance, Father's Day, 1:1 square dark moody"
+        "id": 11, "date": "2026-06-20", "time": "07:00",
+        "platforms": ["instagram"],
+        "format": "carousel",
+        "hook": "Qu'est-ce que ces soirées ont en commun ?",
+        "slides": [
+            {"text": "Qu'est-ce que ces soirées ont en commun ?", "sub": "", "is_cover": True},
+            {"text": "🎂 Un anniversaire inoubliable.", "sub": "La table qui rend la soirée mémorable."},
+            {"text": "💑 Un anniversaire de mariage.", "sub": "L'endroit où l'on revient chaque année."},
+            {"text": "🥂 Une promotion célébrée.", "sub": "Parce que certains moments méritent mieux qu'un bar."},
+            {"text": "Elles ont toutes eu lieu à La Medusa.", "sub": "Réservez votre moment · lamedusarestaurant.ca 🍷", "is_cta": True},
+        ],
+        "caption_fr": "Qu'est-ce que ces soirées ont en commun ? 🍷\n\nUn anniversaire. Un mariage. Une promotion. Un reencuentro. Une première date.\n\nElles ont toutes trouvé leur place à La Medusa.\n\nRéservation en bio — les week-ends se remplissent vite. 🔗\n\n#LaMedusaMontreal #SoireeItalienne #RestaurantItalienMontreal #FineDining",
+        "media_folder": "fotos_png",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "celebraciones"
     },
     {
-        "id": 8, "tipo": "static", "plataformas": ["instagram", "facebook"],
-        "titulo": "Bonne fête des pères",
-        "image_prompt": "Family dinner table with wine glasses raised in toast, warm Italian restaurant, emotional celebration, 1:1 square"
+        "id": 12, "date": "2026-06-21", "time": "13:00",
+        "platforms": ["facebook"],
+        "format": "reel",
+        "hook": "Saviez-vous que chez La Medusa, toutes les pâtes sont faites à la main ?",
+        "caption_fr": "Saviez-vous que chez La Medusa, toutes les pâtes sont faites à la main ? 🍝\n\nChaque jour, avec les mêmes gestes et la même passion qu'en 1996.\n\nVenez goûter la différence : lamedusarestaurant.ca\n\n#LaMedusaMontreal #CuisineItalienne #FaitMaison #RestaurantMontreal",
+        "media_folder": "fotos_videos",
+        "media_type": "video",
+        "reuse_from": 9,
+        "voiceover": False,
+        "pilar": "gastronomia"
     },
     {
-        "id": 11, "tipo": "carousel", "plataformas": ["instagram"],
-        "titulo": "Qu'est-ce que ces soirées ont en commun?",
-        "image_prompts": [
-            "Elegant Italian restaurant interior full of happy guests, warm ambiance, 1:1",
-            "Birthday celebration at Italian restaurant, cake and wine, warm lights, 1:1",
-            "Wedding reception dinner, Italian restaurant, elegant table setting, 1:1",
-            "Business dinner celebration, champagne toast, Italian restaurant, 1:1",
-            "Romantic dinner for two, Italian restaurant, candles and wine, CTA reservation, 1:1"
-        ]
+        "id": 13, "date": "2026-06-24", "time": "07:00",
+        "platforms": ["instagram"],
+        "format": "reel",
+        "hook": "Depuis 1996, certaines choses n'ont pas changé à La Medusa.",
+        "caption_fr": "Depuis novembre 1996, certaines choses n'ont pas changé chez La Medusa. 🍷\n\nLa passion pour la vraie cuisine italienne. L'accueil chaleureux. Les recettes faites maison.\n\n29 ans à Montréal. Et ce novembre… on fête les 30.\n\nMerci à tous ceux qui font partie de cette histoire. 🙏\n\n#LaMedusaMontreal #Depuis1996 #RestaurantItalienMontreal #30Ans",
+        "media_folder": "fotos_videos",
+        "media_type": "video",
+        "voiceover": True,
+        "voiceover_text": "Depuis novembre 1996, certaines choses n'ont pas changé chez La Medusa. La passion. L'authenticité. La famiglia. Vingt-neuf ans à Montréal. Et ce novembre… on fête les trente.",
+        "pilar": "herencia",
+        "priority": "max"
     },
     {
-        "id": 15, "tipo": "carousel", "plataformas": ["instagram"],
-        "titulo": "On ne sait jamais qui peut être assis à la table d'à côté",
-        "image_prompts": [
-            "Full elegant Italian restaurant, diverse crowd of guests, warm ambiance, 1:1",
-            "VIP guests at Italian restaurant, professional athletes dining, discreet elegant, 1:1",
-            "Business people at Italian restaurant, power lunch, elegant setting, 1:1",
-            "Happy family at Italian restaurant, multigenerational dinner, warm light, 1:1",
-            "Elegant table setting at La Medusa restaurant, CTA reservation, 1:1"
-        ]
+        "id": 14, "date": "2026-06-25", "time": "07:00",
+        "platforms": ["tiktok"],
+        "format": "reel",
+        "hook": "Montréal s'éveille. Et La Medusa aussi.",
+        "caption_fr": "Montréal s'éveille. Et La Medusa aussi. 🍷 On vous attend cet été !\n#montreal #summer #foodtok #italianfood #fyp #montrealfood",
+        "media_folder": "fotos_videos",
+        "media_type": "video",
+        "voiceover": False,
+        "pilar": "celebraciones"
     },
     {
-        "id": 16, "tipo": "static", "plataformas": ["facebook"],
-        "titulo": "Vous cherchez un espace privé au cœur du centre-ville?",
-        "image_prompt": "Private dining room in Italian restaurant, long elegant table, candles, projector screen, 50 people capacity, Montreal downtown, 1:1"
+        "id": 15, "date": "2026-06-27", "time": "07:00",
+        "platforms": ["instagram"],
+        "format": "carousel",
+        "hook": "On ne sait jamais qui peut être assis à la table d'à côté.",
+        "slides": [
+            {"text": "On ne sait jamais qui peut être assis à la table d'à côté.", "sub": "", "is_cover": True},
+            {"text": "La Medusa est un véritable point de rencontre à Montréal.", "sub": ""},
+            {"text": "Des joueurs. Des décideurs. Des familles. Des amis.", "sub": ""},
+            {"text": "Tous autour de la même table italienne.", "sub": ""},
+            {"text": "Et toi, à quelle table seras-tu ce soir ? 🍷", "sub": "Réservez · lamedusarestaurant.ca", "is_cta": True},
+        ],
+        "caption_fr": "On ne sait jamais qui peut être assis à la table d'à côté. 👀🍷\n\nChez La Medusa, c'est l'une des choses qui rend chaque soirée unique.\n\nRéservation en bio. 🔗\n\n#LaMedusaMontreal #RestaurantItalienMontreal #BellCentre #MontrealFoodie #FineDining",
+        "media_folder": "fotos_png",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "sala_privada"
     },
     {
-        "id": 17, "tipo": "carousel", "plataformas": ["instagram"],
-        "titulo": "Vous savez choisir votre plat. Mais le vin?",
-        "image_prompts": [
-            "Italian white wine bottle with seafood pasta, elegant pairing, 1:1",
-            "Italian red wine with meat dish, perfect pairing, elegant, 1:1",
-            "Rosé wine with aperitivo selection, Italian restaurant, 1:1",
-            "Sommelier presenting wine bottle, Italian restaurant, elegant, 1:1",
-            "Wine cellar selection, Italian restaurant, warm lighting, CTA, 1:1"
-        ]
+        "id": 16, "date": "2026-06-28", "time": "09:00",
+        "platforms": ["facebook"],
+        "format": "static",
+        "hook": "Vous cherchez un espace privé au cœur du centre-ville de Montréal ?",
+        "caption_fr": "Vous cherchez un espace privé au cœur du centre-ville de Montréal ? 🍷\n\nLa Medusa offre une salle privée au sous-sol, idéale pour :\n✓ Dîners d'affaires et réunions corporatives\n✓ Célébrations privées et événements exclusifs\n✓ Réceptions jusqu'à 50 personnes\n\n📍 À deux pas du Bell Centre\n📞 (514) 878-4499\n🔗 lamedusarestaurant.ca\n\n#LaMedusaMontreal #SallePrivee #EvenementsCorporatifs #RestaurantMontreal",
+        "media_folder": "fotos_png",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "sala_privada"
+    },
+    {
+        "id": 17, "date": "2026-06-27", "time": "07:00",
+        "platforms": ["instagram"],
+        "format": "carousel",
+        "hook": "Vous savez choisir votre plat. Mais le vin ?",
+        "slides": [
+            {"text": "Vous savez choisir votre plat. Mais le vin ?", "sub": "", "is_cover": True},
+            {"text": "Osso Buco + Barolo", "sub": "Un mariage classique du Nord de l'Italie."},
+            {"text": "Linguine alle Vongole + Pinot Grigio", "sub": "Fraîcheur et légèreté pour les fruits de mer."},
+            {"text": "Veau Marsala + Primitivo", "sub": "Richesse et profondeur pour la viande."},
+            {"text": "Demandez conseil à notre équipe. 🍷", "sub": "Réservez · lamedusarestaurant.ca", "is_cta": True},
+        ],
+        "caption_fr": "Vous savez choisir votre plat. Mais le vin ? 🍷\n\nChez La Medusa, notre sélection de vins italiens est choisie pour accompagner chaque plat à la perfection.\n\nGlissez pour découvrir nos accords préférés 👉\n\nRéservation en bio. 🔗\n\n#LaMedusaMontreal #MaridageVin #CuisineItalienneAuthentique #VinItalien",
+        "media_folder": "fotos_png",
+        "media_type": "image",
+        "voiceover": False,
+        "pilar": "gastronomia"
+    },
+    {
+        "id": 18, "date": "2026-06-28", "time": "07:00",
+        "platforms": ["tiktok"],
+        "format": "reel",
+        "hook": "Ce novembre, La Medusa fête ses 30 ans à Montréal.",
+        "caption_fr": "Ce novembre, La Medusa fête ses 30 ans à Montréal. 🍷 On a hâte de célébrer avec vous.\n#montreal #foodtok #italianfood #fyp #depuis1996 #30ans",
+        "media_folder": "fotos_videos",
+        "media_type": "video",
+        "reuse_from": 13,
+        "voiceover": False,
+        "pilar": "herencia"
     },
 ]
 
-def claude_ask(prompt: str, system: str = None) -> str:
-    """Call Claude API directly"""
-    messages = [{"role": "user", "content": prompt}]
-    payload = {
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 1000,
-        "messages": messages
+CONTENT_PLANS = {
+    "la_medusa": {
+        "junio_2026": LA_MEDUSA_JUNIO_2026
     }
-    if system:
-        payload["system"] = system
-    r = requests.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json"
-        },
-        json=payload
-    )
-    r.raise_for_status()
-    return r.json()["content"][0]["text"]
+}
 
-def process_reel(post: dict, output_dir: Path):
-    """Process a Reel post — video + voice over"""
-    print(f"\n🎬 POST #{post['id']} — {post['titulo']}")
-    post_dir = output_dir / f"post_{post['id']:02d}"
-    post_dir.mkdir(exist_ok=True)
 
-    video_path  = post_dir / "video.mp4"
-    audio_path  = post_dir / "voiceover_fr.mp3"
-    final_path  = post_dir / "final.mp4"
+def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = None) -> dict:
+    """Produce one post: download media, create visuals, generate voiceover."""
+    post_id = post["id"]
+    fmt = post["format"]
+    post_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Video — generate image first, then animate using its URL
-    if post.get("usa_video_real") and post.get("video_source"):
-        src = Path("videos") / post["video_source"]
-        if src.exists():
-            import shutil
-            shutil.copy(src, video_path)
-            print(f"  ✅ Using real video: {post['video_source']}")
-        else:
-            print(f"  ⚠️ Real video not found — generating AI video...")
-            prompt = post.get("video_prompt", post["titulo"])
-            img_path = post_dir / "frame.jpg"
-            print(f"  🎨 Generating base image...")
-            img_job = higgsfield.generate_image(prompt=prompt, aspect_ratio="9:16")
-            image_url = higgsfield.get_result_url(img_job)
-            higgsfield.download_result(img_job, str(img_path))
-            print(f"  🎬 Animating image to video...")
-            vid_job = higgsfield.generate_video(
-                prompt=prompt,
-                model="higgsfield-ai/dop/standard",
-                start_image_url=image_url,
-                duration=5
-            )
-            higgsfield.download_result(vid_job, str(video_path))
+    result = {"post_id": post_id, "files": [], "caption": post["caption_fr"]}
+
+    # Get media files
+    folder_key = post.get("media_folder", "fotos_png")
+    media_type  = post.get("media_type", "image")
+    media_local = media_dir / folder_key
+
+    if media_type == "video":
+        media_files = get_videos(str(media_local))
     else:
-        prompt = post["video_prompt"]
-        img_path = post_dir / "frame.jpg"
-        print(f"  🎨 Generating base image...")
-        img_job = higgsfield.generate_image(prompt=prompt, aspect_ratio="9:16")
-        image_url = higgsfield.get_result_url(img_job)
-        higgsfield.download_result(img_job, str(img_path))
-        print(f"  🎬 Animating to video...")
-        vid_job = higgsfield.generate_video(
-            prompt=prompt,
-            model="higgsfield-ai/dop/standard",
-            start_image_url=image_url,
-            duration=5
+        media_files = get_images(str(media_local))
+
+    if not media_files:
+        print(f"  ⚠️ No media found in {media_local} — skipping post #{post_id}")
+        return result
+
+    # Pick media file based on post index (cycle through available files)
+    idx = (post_id - 1) % len(media_files)
+    main_media = str(media_files[idx])
+
+    # ── STATIC POST ──────────────────────────────────────────────────────────
+    if fmt == "static":
+        out = str(post_dir / "post.jpg")
+        create_static_post(
+            photo_path=main_media,
+            output_path=out,
+            text_lines=[
+                {"text": post["hook"], "style": "subtitle", "color": "#d6b646"},
+                {"text": "La Medusa · lamedusarestaurant.ca", "style": "body", "color": "#f5f0e8", "size": 28}
+            ],
+            logo_path=logo_path
         )
-        higgsfield.download_result(vid_job, str(video_path))
+        result["files"].append(out)
 
-    # 2. Voice over (FR primary; EN/ES also supported via lang param)
-    if post.get("voiceover_fr"):
-        print(f"  🎙️ Generating French voice over...")
-        tts.generate_voiceover(
-            text=post["voiceover_fr"],
-            output_path=str(audio_path),
-            lang="fr"
-        )
+    # ── CAROUSEL ─────────────────────────────────────────────────────────────
+    elif fmt == "carousel":
+        slides = post.get("slides", [])
+        slide_files = []
+        img_files = get_images(str(media_local))
 
-    # 3. Merge video + voiceover with FFmpeg (zero quality loss)
-    if video_path.exists() and audio_path.exists():
-        print(f"  🎬 Merging video + voiceover with FFmpeg...")
-        merge_video_audio(str(video_path), str(audio_path), str(final_path))
-    elif video_path.exists():
-        final_path = video_path  # no voiceover, use video as-is
+        for i, slide in enumerate(slides):
+            out = str(post_dir / f"slide_{i+1:02d}.jpg")
+            is_cta = slide.get("is_cta", False)
+            is_cover = slide.get("is_cover", i == 0)
 
-    print(f"  ✅ POST #{post['id']} complete → {final_path}")
-    return {"post_id": post["id"], "dir": str(post_dir), "final": str(final_path)}
+            if is_cta:
+                photo = main_media
+            else:
+                photo = str(img_files[i % len(img_files)]) if img_files else main_media
 
-def process_images(post: dict, output_dir: Path):
-    """Process carousel or static image posts"""
-    print(f"\n🖼️  POST #{post['id']} — {post['titulo']}")
-    post_dir = output_dir / f"post_{post['id']:02d}"
-    post_dir.mkdir(exist_ok=True)
+            create_carousel_slide(
+                photo_path=photo,
+                output_path=out,
+                main_text=slide["text"],
+                sub_text=slide.get("sub", ""),
+                is_cover=is_cover,
+                is_cta=is_cta,
+                logo_path=logo_path if is_cta else None
+            )
+            slide_files.append(out)
+            print(f"  🖼️  Slide {i+1}/{len(slides)} → {out}")
 
-    prompts = post.get("image_prompts", [post.get("image_prompt", "")])
+        result["files"] = slide_files
 
-    for i, prompt in enumerate(prompts):
-        print(f"  🎨 Generating image {i+1}/{len(prompts)}...")
-        job = higgsfield.generate_image(
-            prompt=f"Italian restaurant Montreal La Medusa, {prompt}, professional photography, warm elegant lighting",
-            aspect_ratio="1:1"
-        )
-        higgsfield.download_result(job, str(post_dir / f"slide_{i+1:02d}.jpg"))
+    # ── REEL ─────────────────────────────────────────────────────────────────
+    elif fmt == "reel":
+        reuse_from = post.get("reuse_from")
+        if reuse_from:
+            # Reuse video from another post
+            src_dir = post_dir.parent / f"post_{reuse_from:02d}"
+            src_video = next(src_dir.glob("*.mp4"), None) if src_dir.exists() else None
+            if src_video:
+                import shutil
+                out = str(post_dir / "video.mp4")
+                shutil.copy(str(src_video), out)
+                result["files"].append(out)
+                print(f"  ♻️  Reused video from post #{reuse_from}")
+                return result
 
-    print(f"  ✅ POST #{post['id']} complete → {post_dir}")
-    return {"post_id": post["id"], "dir": str(post_dir)}
+        # Add text overlay to video
+        video_with_text = str(post_dir / "video_text.mp4")
+        try:
+            add_text_overlay_to_video(
+                video_path=main_media,
+                output_path=video_with_text,
+                text=post["hook"],
+                position="bottom"
+            )
+        except Exception as e:
+            print(f"  ⚠️ Text overlay failed: {e} — using original video")
+            import shutil
+            shutil.copy(main_media, video_with_text)
+
+        # Generate voiceover if needed
+        if post.get("voiceover") and post.get("voiceover_text"):
+            audio_path = str(post_dir / "voiceover.mp3")
+            print(f"  🎙️ Generating French voiceover...")
+            tts.generate_voiceover(
+                text=post["voiceover_text"],
+                output_path=audio_path,
+                lang="fr"
+            )
+            final_video = str(post_dir / "final.mp4")
+            merge_video_audio(video_with_text, audio_path, final_video)
+            result["files"].append(final_video)
+        else:
+            import shutil
+            final_video = str(post_dir / "final.mp4")
+            shutil.copy(video_with_text, final_video)
+            result["files"].append(final_video)
+
+    return result
+
 
 def run_cycle(client: str, month: str):
-    """Run full monthly content cycle"""
+    """Run the full content production cycle for a client/month."""
     print(f"\n{'='*60}")
-    print(f"  🍴 FORKY G — {client.upper()} — {month.upper()}")
-    print(f"{'='*60}")
-
-    output_dir = Path(f"output/{client}/{month}")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    results = []
-    for post in LA_MEDUSA_POSTS:
-        try:
-            if post["tipo"] == "reel":
-                result = process_reel(post, output_dir)
-            else:
-                result = process_images(post, output_dir)
-            results.append({**result, "status": "ok"})
-        except Exception as e:
-            print(f"  ❌ POST #{post['id']} failed: {e}")
-            results.append({"post_id": post["id"], "status": "error", "error": str(e)})
-
-    # Save summary
-    summary_path = output_dir / "cycle_summary.json"
-    with open(summary_path, "w") as f:
-        json.dump(results, f, indent=2, ensure_ascii=False)
-
-    print(f"\n{'='*60}")
-    print(f"  ✅ CYCLE COMPLETE — {sum(1 for r in results if r['status']=='ok')}/{len(results)} posts")
-    print(f"  📄 Summary: {summary_path}")
+    print(f"  🚀 FORKY-G — {client.upper()} — {month.upper()}")
     print(f"{'='*60}\n")
 
+    # Load content plan
+    plan = CONTENT_PLANS.get(client, {}).get(month)
+    if not plan:
+        print(f"  ❌ No content plan found for {client}/{month}")
+        print(f"  Available: {list(CONTENT_PLANS.keys())}")
+        sys.exit(1)
+
+    # Output and media directories
+    output_dir = Path("output") / client / month
+    media_dir  = Path("media") / client
+    output_dir.mkdir(parents=True, exist_ok=True)
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    # Step 1: Sync media from Drive
+    print("📥 Downloading media from Google Drive...\n")
+    for folder_key in ["fotos_videos", "fotos_png", "joe"]:
+        local = media_dir / folder_key
+        try:
+            sync_drive_folder(folder_key, str(local))
+        except Exception as e:
+            print(f"  ⚠️ Could not sync {folder_key}: {e}")
+
+    # Step 2: Look for logo
+    logo_path = None
+    for ext in ["png", "jpg", "jpeg", "svg"]:
+        candidates = list(media_dir.rglob(f"*logo*.{ext}")) + list(media_dir.rglob(f"*Logo*.{ext}"))
+        if candidates:
+            logo_path = str(candidates[0])
+            print(f"  🎨 Logo found: {logo_path}")
+            break
+
+    # Step 3: Produce each post
+    print("\n📸 Producing content...\n")
+    results = []
+    success = 0
+
+    for post in plan:
+        post_dir = output_dir / f"post_{post['id']:02d}"
+        print(f"{'─'*40}")
+        print(f"📌 POST #{post['id']} — {post['hook'][:50]}...")
+
+        try:
+            result = produce_post(post, media_dir, post_dir, logo_path)
+            if result["files"]:
+                success += 1
+                # Save caption
+                caption_file = post_dir / "caption.txt"
+                caption_file.write_text(result["caption"], encoding="utf-8")
+                # Save post metadata
+                meta_file = post_dir / "meta.json"
+                meta_file.write_text(json.dumps({
+                    "id": post["id"],
+                    "date": post["date"],
+                    "time": post["time"],
+                    "platforms": post["platforms"],
+                    "format": post["format"],
+                    "hook": post["hook"],
+                    "files": result["files"],
+                    "caption": result["caption"]
+                }, ensure_ascii=False, indent=2), encoding="utf-8")
+                results.append(result)
+                print(f"  ✅ POST #{post['id']} complete → {post_dir}")
+            else:
+                print(f"  ❌ POST #{post['id']} failed — no files produced")
+        except Exception as e:
+            print(f"  ❌ POST #{post['id']} failed: {e}")
+
+    # Summary
+    print(f"\n{'='*60}")
+    print(f"  ✅ CYCLE COMPLETE — {success}/{len(plan)} posts")
+    print(f"  📁 Output: {output_dir}")
+    print(f"{'='*60}\n")
+
+    # Save cycle summary
+    summary = {
+        "client": client,
+        "month": month,
+        "timestamp": datetime.now().isoformat(),
+        "total": len(plan),
+        "success": success,
+        "posts": results
+    }
+    summary_file = output_dir / "cycle_summary.json"
+    summary_file.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Forky G — Pont Digital AI Content Agent")
+    parser = argparse.ArgumentParser(description="Forky-G Content Agent")
     parser.add_argument("--client", default="la_medusa")
-    parser.add_argument("--month", default="junio_2026")
+    parser.add_argument("--month",  default="junio_2026")
     args = parser.parse_args()
+
     run_cycle(args.client, args.month)
