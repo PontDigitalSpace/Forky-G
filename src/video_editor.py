@@ -178,9 +178,9 @@ def concat_clips(clip_paths: list, output_path: str) -> str:
         "-f", "concat",
         "-safe", "0",
         "-i", list_file,
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
-        "-profile:v", "high", "-level", "4.0",
-        "-pix_fmt", "yuv420p",
+        "-vf", "format=yuv420p",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
         "-movflags", "+faststart",
         output_path
@@ -269,8 +269,8 @@ def image_to_video(image_path: str, output_path: str,
         "-i", image_path,
         "-t", str(duration),
         "-vf", vf,
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
-        "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
         "-r", "25",
         output_path
     ]

@@ -206,10 +206,11 @@ def add_text_overlay_to_video(
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
-        "-vf", drawtext,
-        "-c:v", "libx264", "-crf", "18",
+        "-vf", f"format=yuv420p,{drawtext}",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
         "-c:a", "copy",
-        "-preset", "fast",
+        "-movflags", "+faststart",
         output_path
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
