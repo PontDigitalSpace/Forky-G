@@ -482,32 +482,90 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
             # RULE: Use real client footage first. Only use Higgsfield if scene missing.
             best = find_best_clip(clip_index, scene_desc, used_clips) if clip_index else None
 
-            if best:
-                # ✅ Real footage found — edit with FFmpeg
-                print(f"  🎬 Scene {i+1}: using real clip '{best['name']}' ({best.get('subject','?')})")
+            if best and higgsfield:
+                # ✅ OPTION A: Real footage found → extract frame → Higgsfield cinematic video
+                print(f"  🎬→🤖 Scene {i+1}: '{best['name']}' → Higgsfield (cinematic)")
+                used_clips.append(best["name"])
+
+                # Extract reference frame from real clip or use photo directly
+                ref_frame = str(post_dir / f"ref_frame_{i+1:02d}.jpg")
+                if best["type"] == "video":
+                    from clip_indexer import extract_frame
+                    extract_frame(best["path"], ref_frame, position=0.33)
+                else:
+                    # It's a photo — use directly
+                    import shutil as _sh
+                    _sh.copy(best["path"], ref_frame)
+
+                # Build cinematic prompt from scene description
+                hf_vid_prompt = scene.get(
+                    "higgsfield_vid_prompt",
+                    f"La Medusa Italian restaurant Montreal, {scene_desc}, "
+                    f"slow cinematic camera movement, warm candlelight, elegant fine dining atmosphere"
+                )
+
+                try:
+                    # Upload reference frame to get public URL, then generate cinematic video
+                    frame_url = higgsfield.upload_image(ref_frame)
+                    vid_job = higgsfield.generate_video(
+                        prompt=hf_vid_prompt,
+                        model="higgsfield-ai/dop/standard",
+                        start_image_url=frame_url,
+                        duration=scene_dur
+                    )
+                    higgsfield.download_result(vid_job, scene_out)
+
+                    # Color grade
+                    graded = str(post_dir / f"graded_{i+1:02d}.mp4")
+                    grade_video(scene_out, graded, style="warm_gold")
+                    scene_out = graded
+
+                    if scene_text:
+                        with_text = str(post_dir / f"scene_text_{i+1:02d}.mp4")
+                        try:
+                            add_text_overlay_to_video(scene_out, with_text, scene_text, "bottom")
+                            scene_out = with_text
+                        except Exception:
+                            pass
+
+                except Exception as e:
+                    print(f"  ⚠️ Higgsfield failed for scene {i+1}: {e} — falling back to FFmpeg")
+                    # Fallback: basic FFmpeg edit if Higgsfield fails
+                    raw = str(post_dir / f"raw_{i+1:02d}.mp4")
+                    if best["type"] == "video":
+                        trim_clip(best["path"], raw, start=0, duration=scene_dur)
+                    else:
+                        from video_editor import image_to_video
+                        image_to_video(best["path"], raw, duration=scene_dur)
+                    cropped = str(post_dir / f"cropped_{i+1:02d}.mp4")
+                    crop_916(raw, cropped)
+                    grade_video(cropped, scene_out, style="warm_gold")
+                    if scene_text:
+                        graded = scene_out
+                        scene_out = str(post_dir / f"scene_text_{i+1:02d}.mp4")
+                        try:
+                            add_text_overlay_to_video(graded, scene_out, scene_text, "bottom")
+                        except Exception:
+                            scene_out = graded
+
+            elif best and not higgsfield:
+                # Higgsfield not available — fallback to FFmpeg only
+                print(f"  🎬 Scene {i+1}: FFmpeg only (Higgsfield unavailable) '{best['name']}'")
                 used_clips.append(best["name"])
                 raw = str(post_dir / f"raw_{i+1:02d}.mp4")
-
                 if best["type"] == "video":
                     trim_clip(best["path"], raw, start=0, duration=scene_dur)
                 else:
-                    # Photo → animate with Ken Burns
                     from video_editor import image_to_video
                     image_to_video(best["path"], raw, duration=scene_dur)
-
-                # Crop to 9:16
                 cropped = str(post_dir / f"cropped_{i+1:02d}.mp4")
                 crop_916(raw, cropped)
-
-                # Color grading
                 grade_video(cropped, scene_out, style="warm_gold")
-
-                # Add text overlay if scene has text
                 if scene_text:
                     graded = scene_out
                     scene_out = str(post_dir / f"scene_text_{i+1:02d}.mp4")
                     try:
-                        add_text_overlay_to_video(graded, scene_out, scene_text, position="bottom")
+                        add_text_overlay_to_video(graded, scene_out, scene_text, "bottom")
                     except Exception:
                         scene_out = graded
 

@@ -53,6 +53,25 @@ class HiggsFieldClient:
         request_id = response.json().get("request_id") or response.json().get("id")
         return self._poll_request(request_id, timeout=300)
 
+    def upload_image(self, image_path: str) -> str:
+        """
+        Upload a local image file to a temporary host and return a public URL.
+        Uses 0x0.st — free, no-auth, files retained up to 30 days.
+        Returns the public URL string.
+        """
+        with open(image_path, "rb") as f:
+            response = requests.post(
+                "https://0x0.st",
+                files={"file": f},
+                timeout=60
+            )
+        response.raise_for_status()
+        url = response.text.strip()
+        if not url.startswith("http"):
+            raise Exception(f"upload_image: unexpected response: {url}")
+        print(f"  📤 Uploaded frame → {url}")
+        return url
+
     def get_result_url(self, job: dict) -> str:
         """Extract the public URL from a completed job result."""
         if job.get("images"):
