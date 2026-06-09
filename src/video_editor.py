@@ -54,7 +54,7 @@ def trim_clip(input_path: str, output_path: str,
         "-ss", str(start),
         "-i", input_path,
         "-t", str(duration),
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         output_path
     ]
@@ -80,7 +80,7 @@ def crop_916(input_path: str, output_path: str) -> str:
         "ffmpeg", "-y",
         "-i", input_path,
         "-vf", vf,
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
         "-c:a", "copy",
         output_path
     ]
@@ -112,7 +112,7 @@ def grade_video(input_path: str, output_path: str,
         "ffmpeg", "-y",
         "-i", input_path,
         "-vf", vf,
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
         "-c:a", "copy",
         output_path
     ]
@@ -130,7 +130,7 @@ def slow_motion(input_path: str, output_path: str, factor: float = 2.0) -> str:
         "-i", input_path,
         "-vf", f"setpts={factor}*PTS",
         "-af", f"atempo={1/factor}",
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
         output_path
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -178,8 +178,10 @@ def concat_clips(clip_paths: list, output_path: str) -> str:
         "-f", "concat",
         "-safe", "0",
         "-i", list_file,
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
-        "-c:a", "aac", "-b:a", "192k",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
+        "-profile:v", "high", "-level", "4.0",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
         "-movflags", "+faststart",
         output_path
     ]
@@ -216,7 +218,7 @@ def merge_video_audio(video_path: str, audio_path: str, output_path: str) -> str
             "-filter_complex", "[1:a]loudnorm=I=-14:TP=-2:LRA=11[aout]",
             "-map", "0:v",
             "-map", "[aout]",
-            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+            "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
             output_path
@@ -231,7 +233,7 @@ def merge_video_audio(video_path: str, audio_path: str, output_path: str) -> str
             "-filter_complex", "[1:a]loudnorm=I=-14:TP=-2:LRA=11[aout]",
             "-map", "0:v",
             "-map", "[aout]",
-            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+            "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
             output_path
@@ -267,7 +269,7 @@ def image_to_video(image_path: str, output_path: str,
         "-i", image_path,
         "-t", str(duration),
         "-vf", vf,
-        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
         "-pix_fmt", "yuv420p",
         "-r", "25",
         output_path
