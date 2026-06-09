@@ -22,7 +22,9 @@ from datetime import datetime
 from drive_downloader import sync_drive_folder, get_images, get_videos
 from post_creator import create_static_post, create_carousel_slide, add_text_overlay_to_video
 from openai_tts_client import OpenAITTSClient
-from video_editor import merge_video_audio
+from video_editor import merge_video_audio, trim_clip, crop_916, normalize_audio, concat_clips, grade_video
+from clip_indexer import build_index, find_best_clip
+from higgsfield_client import HiggsFieldClient
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY  = os.environ["ANTHROPIC_API_KEY"]
@@ -31,7 +33,8 @@ HIGGSFIELD_API_KEY = os.environ.get("HIGGSFIELD_API_KEY", "")
 GDRIVE_FOLDER_ID   = os.environ.get("GDRIVE_FOLDER_ID", "")
 
 # ── Clients ───────────────────────────────────────────────────────────────────
-tts = OpenAITTSClient(OPENAI_API_KEY)
+tts        = OpenAITTSClient(OPENAI_API_KEY)
+higgsfield = HiggsFieldClient(HIGGSFIELD_API_KEY) if HIGGSFIELD_API_KEY else None
 
 # ── Content Plan — La Medusa Junio 2026 ──────────────────────────────────────
 # Loaded from ClickUp documents. Structure follows the Plan Mensual.
@@ -45,7 +48,16 @@ LA_MEDUSA_JUNIO_2026 = [
         "media_folder": "fotos_videos",
         "media_type": "video",
         "voiceover": False,
-        "pilar": "gastronomia"
+        "pilar": "gastronomia",
+        "scenes": [
+            {"description": "restaurant interior dark background elegant", "duration": 3, "text": "Si tu es à Montréal, tu dois goûter ça…"},
+            {"description": "pasta dish close up plate elegant", "duration": 5, "text": ""},
+            {"description": "salmon fish dish close up plate", "duration": 5, "text": ""},
+            {"description": "risotto dish close up elegant", "duration": 5, "text": ""},
+            {"description": "meat steak dish close up", "duration": 5, "text": ""},
+            {"description": "dessert tiramisu close up", "duration": 5, "text": ""},
+            {"description": "restaurant interior ambient warm lighting tables", "duration": 5, "text": "La Medusa · 1218 Rue Drummond"},
+        ]
     },
     {
         "id": 2, "date": "2026-06-06", "time": "07:00",
@@ -360,50 +372,148 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
 
     # ── REEL ─────────────────────────────────────────────────────────────────
     elif fmt == "reel":
+        import shutil
+
+        # Handle reuse from another post
         reuse_from = post.get("reuse_from")
         if reuse_from:
-            # Reuse video from another post
             src_dir = post_dir.parent / f"post_{reuse_from:02d}"
-            src_video = next(src_dir.glob("*.mp4"), None) if src_dir.exists() else None
+            src_video = next(src_dir.glob("final*.mp4"), None) if src_dir.exists() else None
             if src_video:
-                import shutil
-                out = str(post_dir / "video.mp4")
+                out = str(post_dir / "final.mp4")
                 shutil.copy(str(src_video), out)
                 result["files"].append(out)
                 print(f"  ♻️  Reused video from post #{reuse_from}")
                 return result
 
-        # Add text overlay to video
-        video_with_text = str(post_dir / "video_text.mp4")
-        try:
-            add_text_overlay_to_video(
-                video_path=main_media,
-                output_path=video_with_text,
-                text=post["hook"],
-                position="bottom"
-            )
-        except Exception as e:
-            print(f"  ⚠️ Text overlay failed: {e} — using original video")
-            import shutil
-            shutil.copy(main_media, video_with_text)
+        # Load clip index
+        index_file = media_dir / "clip_index.json"
+        clip_index = {}
+        if index_file.exists():
+            with open(index_file) as f:
+                clip_index = json.load(f)
 
-        # Generate voiceover if needed
+        # Get scenes for this post
+        scenes = post.get("scenes", [])
+        if not scenes:
+            # Fallback: create one scene per hook line
+            scenes = [{"description": post["hook"], "duration": 5, "text": post["hook"]}]
+
+        # ── PRODUCE EACH SCENE ──────────────────────────────────────────────
+        scene_clips = []
+        used_clips = []
+
+        for i, scene in enumerate(scenes):
+            scene_out = str(post_dir / f"scene_{i+1:02d}.mp4")
+            scene_desc = scene.get("description", "")
+            scene_dur  = scene.get("duration", 5)
+            scene_text = scene.get("text", "")
+
+            # RULE: Use real client footage first. Only use Higgsfield if scene missing.
+            best = find_best_clip(clip_index, scene_desc, used_clips) if clip_index else None
+
+            if best:
+                # ✅ Real footage found — edit with FFmpeg
+                print(f"  🎬 Scene {i+1}: using real clip '{best['name']}' ({best.get('subject','?')})")
+                used_clips.append(best["name"])
+                raw = str(post_dir / f"raw_{i+1:02d}.mp4")
+
+                if best["type"] == "video":
+                    trim_clip(best["path"], raw, start=0, duration=scene_dur)
+                else:
+                    # Photo → animate with Ken Burns
+                    from video_editor import image_to_video
+                    image_to_video(best["path"], raw, duration=scene_dur)
+
+                # Crop to 9:16
+                cropped = str(post_dir / f"cropped_{i+1:02d}.mp4")
+                crop_916(raw, cropped)
+
+                # Color grading
+                grade_video(cropped, scene_out, style="warm_gold")
+
+                # Add text overlay if scene has text
+                if scene_text:
+                    graded = scene_out
+                    scene_out = str(post_dir / f"scene_text_{i+1:02d}.mp4")
+                    try:
+                        add_text_overlay_to_video(graded, scene_out, scene_text, position="bottom")
+                    except Exception:
+                        scene_out = graded
+
+            elif higgsfield:
+                # ❌ No real footage — generate with Higgsfield
+                print(f"  🤖 Scene {i+1}: no real footage for '{scene_desc[:40]}' — generating with Higgsfield")
+                try:
+                    img_job = higgsfield.generate_image(
+                        prompt=f"La Medusa Italian restaurant Montreal, {scene_desc}, warm candlelight, elegant, cinematic",
+                        aspect_ratio="9:16"
+                    )
+                    img_url = higgsfield.get_result_url(img_job)
+                    img_path = str(post_dir / f"hf_img_{i+1:02d}.jpg")
+                    higgsfield.download_result(img_job, img_path)
+
+                    vid_job = higgsfield.generate_video(
+                        prompt=f"{scene_desc}, slow cinematic movement, elegant restaurant",
+                        model="higgsfield-ai/dop/standard",
+                        start_image_url=img_url,
+                        duration=scene_dur
+                    )
+                    higgsfield.download_result(vid_job, scene_out)
+
+                    # Color grade the generated clip
+                    graded = str(post_dir / f"graded_{i+1:02d}.mp4")
+                    grade_video(scene_out, graded, style="warm_gold")
+                    scene_out = graded
+
+                    if scene_text:
+                        with_text = str(post_dir / f"scene_text_{i+1:02d}.mp4")
+                        try:
+                            add_text_overlay_to_video(scene_out, with_text, scene_text, "bottom")
+                            scene_out = with_text
+                        except Exception:
+                            pass
+                except Exception as e:
+                    print(f"  ⚠️ Higgsfield scene {i+1} failed: {e} — skipping")
+                    continue
+            else:
+                print(f"  ⚠️ Scene {i+1}: no footage and Higgsfield not available — skipping")
+                continue
+
+            scene_clips.append(scene_out)
+
+        if not scene_clips:
+            print(f"  ❌ No scenes produced for post #{post_id}")
+            return result
+
+        # ── ASSEMBLE ALL SCENES ─────────────────────────────────────────────
+        if len(scene_clips) == 1:
+            assembled = scene_clips[0]
+        else:
+            assembled = str(post_dir / "assembled.mp4")
+            concat_clips(scene_clips, assembled)
+
+        # ── VOICEOVER ───────────────────────────────────────────────────────
         if post.get("voiceover") and post.get("voiceover_text"):
-            audio_path = str(post_dir / "voiceover.mp3")
             print(f"  🎙️ Generating French voiceover...")
+            audio_path = str(post_dir / "voiceover.mp3")
             tts.generate_voiceover(
                 text=post["voiceover_text"],
                 output_path=audio_path,
                 lang="fr"
             )
             final_video = str(post_dir / "final.mp4")
-            merge_video_audio(video_with_text, audio_path, final_video)
-            result["files"].append(final_video)
+            merge_video_audio(assembled, audio_path, final_video)
         else:
-            import shutil
             final_video = str(post_dir / "final.mp4")
-            shutil.copy(video_with_text, final_video)
-            result["files"].append(final_video)
+            # Normalize audio even without voiceover
+            try:
+                normalize_audio(assembled, final_video)
+            except Exception:
+                shutil.copy(assembled, final_video)
+
+        result["files"].append(final_video)
+        print(f"  ✅ Reel assembled: {len(scene_clips)} scenes → {final_video}")
 
     return result
 
