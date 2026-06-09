@@ -20,7 +20,9 @@ from pathlib import Path
 from datetime import datetime
 
 from drive_downloader import sync_drive_folder, get_images, get_videos
-from post_creator import create_static_post, create_carousel_slide, add_text_overlay_to_video
+from post_creator import (create_static_post, create_carousel_slide,
+                          add_text_overlay_to_video, create_brand_card_video,
+                          add_watermark_to_video)
 from openai_tts_client import OpenAITTSClient
 from video_editor import merge_video_audio, trim_clip, crop_916, normalize_audio, concat_clips, grade_video
 from clip_indexer import build_index, find_best_clip
@@ -50,13 +52,13 @@ LA_MEDUSA_JUNIO_2026 = [
         "voiceover": False,
         "pilar": "gastronomia",
         "scenes": [
-            {"description": "restaurant interior dark background elegant", "duration": 3, "text": "Si tu es à Montréal, tu dois goûter ça…"},
-            {"description": "pasta dish close up plate elegant", "duration": 5, "text": ""},
-            {"description": "salmon fish dish close up plate", "duration": 5, "text": ""},
-            {"description": "risotto dish close up elegant", "duration": 5, "text": ""},
-            {"description": "meat steak dish close up", "duration": 5, "text": ""},
-            {"description": "dessert tiramisu close up", "duration": 5, "text": ""},
-            {"description": "restaurant interior ambient warm lighting tables", "duration": 5, "text": "La Medusa · 1218 Rue Drummond"},
+            {"description": "restaurant interior dark elegant ambient warm", "duration": 3,  "text": ""},
+            {"description": "pasta dish close up plate elegant handmade",    "duration": 4,  "text": "Les pâtes, faites à la main."},
+            {"description": "salmon fish dish close up plate",               "duration": 4,  "text": ""},
+            {"description": "risotto dish close up elegant cream",           "duration": 4,  "text": "Des recettes transmises de génération en génération."},
+            {"description": "meat steak dish close up grill",                "duration": 4,  "text": ""},
+            {"description": "dessert tiramisu chocolate close up",           "duration": 4,  "text": ""},
+            {"description": "restaurant interior ambient warm tables wine",  "duration": 3,  "text": ""},
         ]
     },
     {
@@ -112,7 +114,13 @@ LA_MEDUSA_JUNIO_2026 = [
         "voiceover": True,
         "voiceover_text": "Le meilleur cadeau pour la fête des pères ? Pas un barbecue. Une vraie soirée italienne. Offrez-lui une table à La Medusa.",
         "pilar": "celebraciones",
-        "priority": "max"
+        "priority": "max",
+        "scenes": [
+            {"description": "wine glass pouring bottle elegant",               "duration": 3, "text": ""},
+            {"description": "meat steak dish elegant restaurant",               "duration": 4, "text": "Une vraie soirée italienne."},
+            {"description": "restaurant interior warm tables couple dining",    "duration": 4, "text": ""},
+            {"description": "pasta dish close up handmade elegant",            "duration": 4, "text": "Offrez-lui La Medusa. 🍷"},
+        ]
     },
     {
         "id": 6, "date": "2026-06-13", "time": "07:00",
@@ -164,7 +172,13 @@ LA_MEDUSA_JUNIO_2026 = [
         "media_type": "video",
         "voiceover": True,
         "voiceover_text": "Voilà comment se prépare une vraie pasta italienne chez La Medusa. De la farine, des mains, et des années de savoir-faire. Fait maison. Toujours.",
-        "pilar": "gastronomia"
+        "pilar": "gastronomia",
+        "scenes": [
+            {"description": "pasta sauce cooking pan stovetop kitchen",      "duration": 4, "text": ""},
+            {"description": "pasta dish close up plate elegant handmade",    "duration": 4, "text": "Fait à la main. Chaque jour."},
+            {"description": "chef cooking kitchen professional",             "duration": 4, "text": ""},
+            {"description": "restaurant interior warm lighting elegant",     "duration": 3, "text": ""},
+        ]
     },
     {
         "id": 10, "date": "2026-06-18", "time": "07:00",
@@ -176,7 +190,12 @@ LA_MEDUSA_JUNIO_2026 = [
         "media_type": "video",
         "voiceover": False,
         "pilar": "comunidad",
-        "priority": "max"
+        "priority": "max",
+        "scenes": [
+            {"description": "restaurant exterior storefront entrance street",  "duration": 3, "text": "Tu sais déjà où aller."},
+            {"description": "food dish close up plate elegant",                "duration": 4, "text": ""},
+            {"description": "restaurant interior atmosphere warm dining",      "duration": 3, "text": "📍 Montréal, Rue Drummond"},
+        ]
     },
     {
         "id": 11, "date": "2026-06-20", "time": "07:00",
@@ -219,7 +238,13 @@ LA_MEDUSA_JUNIO_2026 = [
         "voiceover": True,
         "voiceover_text": "Depuis novembre 1996, certaines choses n'ont pas changé chez La Medusa. La passion. L'authenticité. La famiglia. Vingt-neuf ans à Montréal. Et ce novembre… on fête les trente.",
         "pilar": "herencia",
-        "priority": "max"
+        "priority": "max",
+        "scenes": [
+            {"description": "restaurant interior elegant historic warm",      "duration": 4, "text": "Depuis 1996."},
+            {"description": "pasta dish handmade close up elegant",          "duration": 4, "text": ""},
+            {"description": "restaurant dining room warm guests atmosphere",  "duration": 4, "text": "29 ans de passion."},
+            {"description": "wine glass elegant table setting fine dining",   "duration": 3, "text": ""},
+        ]
     },
     {
         "id": 14, "date": "2026-06-25", "time": "07:00",
@@ -230,7 +255,12 @@ LA_MEDUSA_JUNIO_2026 = [
         "media_folder": "fotos_videos",
         "media_type": "video",
         "voiceover": False,
-        "pilar": "celebraciones"
+        "pilar": "celebraciones",
+        "scenes": [
+            {"description": "restaurant exterior storefront montreal street", "duration": 3, "text": "Montréal s'éveille."},
+            {"description": "restaurant interior tables warm summer light",   "duration": 4, "text": ""},
+            {"description": "food dish close up elegant plate",               "duration": 3, "text": "La Medusa aussi. 🍷"},
+        ]
     },
     {
         "id": 15, "date": "2026-06-27", "time": "07:00",
@@ -396,8 +426,20 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
         # Get scenes for this post
         scenes = post.get("scenes", [])
         if not scenes:
-            # Fallback: create one scene per hook line
-            scenes = [{"description": post["hook"], "duration": 5, "text": post["hook"]}]
+            # Fallback: 3-scene structure using hook as description
+            scenes = [
+                {"description": post["hook"], "duration": 4, "text": ""},
+                {"description": "restaurant interior warm elegant", "duration": 4, "text": post["hook"]},
+                {"description": "food dish close up plate elegant", "duration": 4, "text": ""},
+            ]
+
+        # ── INTRO CARD ──────────────────────────────────────────────────────
+        intro_card = str(post_dir / "card_intro.mp4")
+        try:
+            create_brand_card_video(intro_card, post["hook"], card_type="intro", duration=2.0)
+        except Exception as e:
+            print(f"  ⚠️ Intro card failed: {e}")
+            intro_card = None
 
         # ── PRODUCE EACH SCENE ──────────────────────────────────────────────
         scene_clips = []
@@ -486,12 +528,29 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
             print(f"  ❌ No scenes produced for post #{post_id}")
             return result
 
-        # ── ASSEMBLE ALL SCENES ─────────────────────────────────────────────
-        if len(scene_clips) == 1:
-            assembled = scene_clips[0]
+        # ── OUTRO CARD ──────────────────────────────────────────────────────
+        outro_card = str(post_dir / "card_outro.mp4")
+        try:
+            create_brand_card_video(outro_card, "Réservez votre table",
+                                    "lamedusarestaurant.ca",
+                                    card_type="outro", duration=2.0)
+        except Exception as e:
+            print(f"  ⚠️ Outro card failed: {e}")
+            outro_card = None
+
+        # ── ASSEMBLE: [intro] + scenes + [outro] ────────────────────────────
+        all_clips = []
+        if intro_card and Path(intro_card).exists():
+            all_clips.append(intro_card)
+        all_clips.extend(scene_clips)
+        if outro_card and Path(outro_card).exists():
+            all_clips.append(outro_card)
+
+        if len(all_clips) == 1:
+            assembled = all_clips[0]
         else:
             assembled = str(post_dir / "assembled.mp4")
-            concat_clips(scene_clips, assembled)
+            concat_clips(all_clips, assembled)
 
         # ── VOICEOVER ───────────────────────────────────────────────────────
         if post.get("voiceover") and post.get("voiceover_text"):
@@ -502,18 +561,26 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
                 output_path=audio_path,
                 lang="fr"
             )
-            final_video = str(post_dir / "final.mp4")
-            merge_video_audio(assembled, audio_path, final_video)
+            pre_wm = str(post_dir / "pre_wm.mp4")
+            merge_video_audio(assembled, audio_path, pre_wm)
         else:
-            final_video = str(post_dir / "final.mp4")
-            # Normalize audio even without voiceover
+            pre_wm = str(post_dir / "pre_wm.mp4")
             try:
-                normalize_audio(assembled, final_video)
+                normalize_audio(assembled, pre_wm)
             except Exception:
-                shutil.copy(assembled, final_video)
+                shutil.copy(assembled, pre_wm)
 
+        # ── WATERMARK ───────────────────────────────────────────────────────
+        final_video = str(post_dir / "final.mp4")
+        try:
+            add_watermark_to_video(pre_wm, final_video)
+        except Exception as e:
+            print(f"  ⚠️ Watermark failed: {e}")
+            shutil.copy(pre_wm, final_video)
+
+        n_scenes = len(scene_clips)
         result["files"].append(final_video)
-        print(f"  ✅ Reel assembled: {len(scene_clips)} scenes → {final_video}")
+        print(f"  ✅ Reel ready: intro + {n_scenes} scenes + outro + watermark → {final_video}")
 
     return result
 
