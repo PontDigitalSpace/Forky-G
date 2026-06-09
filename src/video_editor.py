@@ -267,11 +267,14 @@ def image_to_video(image_path: str, output_path: str,
         "ffmpeg", "-y",
         "-loop", "1",
         "-i", image_path,
+        "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
         "-t", str(duration),
         "-vf", vf,
         "-c:v", "libx264", "-crf", "18", "-preset", "fast",
         "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k",
         "-r", "25",
+        "-shortest",
         output_path
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
