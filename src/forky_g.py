@@ -101,8 +101,21 @@ LA_MEDUSA_JUNIO_2026 = [
         "media_type": "image",
         "voiceover": False,
         "pilar": "comunidad",
-        "priority": "max"
-    },
+        "priority": "max",
+        "scenes": [
+            {
+                "description": "restaurant staff smiling welcoming guests entrance",
+                "duration": 4,
+                "text": "Pour nos clients, nous sommes aussi…",
+                "higgsfield_prompt": "La Medusa Italian restaurant Montreal, warm and welcoming restaurant staff in elegant dining room, candlelight ambiance, gold tones, cinematic 9:16 vertical"
+            },
+            {
+                "description": "chef cooking kitchen professional elegant",
+                "duration": 4,
+                "text": "…des amis. 🍷",
+                "higgsfield_prompt": "Italian restaurant chef in professional kitchen Montreal, warm lighting, elegant atmosphere, gold and black tones, cinematic vertical 9:16"
+            },
+        ]
     {
         "id": 5, "date": "2026-06-12", "time": "07:00",
         "platforms": ["instagram"],
@@ -500,10 +513,21 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
 
             elif higgsfield:
                 # ❌ No real footage — generate with Higgsfield
-                print(f"  🤖 Scene {i+1}: no real footage for '{scene_desc[:40]}' — generating with Higgsfield")
+                # Use higgsfield_prompt if defined, otherwise build a cinematic prompt from description
+                hf_img_prompt = scene.get(
+                    "higgsfield_prompt",
+                    f"La Medusa Italian restaurant Montreal, {scene_desc}, warm candlelight, "
+                    f"elegant fine dining, gold and black tones, cinematic 9:16 vertical"
+                )
+                hf_vid_prompt = scene.get(
+                    "higgsfield_vid_prompt",
+                    f"{scene_desc}, slow cinematic camera movement, warm elegant atmosphere"
+                )
+                print(f"  🤖 Scene {i+1}: no real footage — generating with Higgsfield")
+                print(f"     Prompt: {hf_img_prompt[:80]}…")
                 try:
                     img_job = higgsfield.generate_image(
-                        prompt=f"La Medusa Italian restaurant Montreal, {scene_desc}, warm candlelight, elegant, cinematic",
+                        prompt=hf_img_prompt,
                         aspect_ratio="9:16"
                     )
                     img_url = higgsfield.get_result_url(img_job)
@@ -511,7 +535,7 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
                     higgsfield.download_result(img_job, img_path)
 
                     vid_job = higgsfield.generate_video(
-                        prompt=f"{scene_desc}, slow cinematic movement, elegant restaurant",
+                        prompt=hf_vid_prompt,
                         model="higgsfield-ai/dop/standard",
                         start_image_url=img_url,
                         duration=scene_dur
