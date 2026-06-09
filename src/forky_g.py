@@ -24,7 +24,7 @@ from post_creator import (create_static_post, create_carousel_slide,
                           add_text_overlay_to_video, create_brand_card_video,
                           add_watermark_to_video)
 from openai_tts_client import OpenAITTSClient
-from video_editor import merge_video_audio, trim_clip, crop_916, normalize_audio, concat_clips, grade_video
+from video_editor import merge_video_audio, trim_clip, crop_916, normalize_audio, concat_clips, grade_video, get_duration
 from clip_indexer import build_index, find_best_clip
 from higgsfield_client import HiggsFieldClient
 
@@ -329,6 +329,21 @@ CONTENT_PLANS = {
     }
 }
 
+# ── Platform video duration limits (seconds) ─────────────────────────────────
+# Based on 2026 algorithm data: completion rate is the #1 ranking factor.
+# Ideal = sweet spot for engagement. Max = hard cap before trimming.
+PLATFORM_DURATION = {
+    "tiktok":    {"ideal": 20, "max": 35},   # viral sweet spot 11-18s, food ok to 35s
+    "instagram": {"ideal": 25, "max": 45},   # 20-30s ideal, 90s limit but 45s is enough
+    "facebook":  {"ideal": 25, "max": 45},   # same as instagram
+}
+
+def get_max_duration_for_post(post: dict) -> float:
+    """Return the shortest max duration across the post's platforms."""
+    platforms = post.get("platforms", ["instagram"])
+    maxes = [PLATFORM_DURATION.get(p, {"max": 45})["max"] for p in platforms]
+    return min(maxes)  # most restrictive platform wins
+
 
 def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = None) -> dict:
     """Produce one post: download media, create visuals, generate voiceover."""
@@ -569,6 +584,17 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
                 normalize_audio(assembled, pre_wm)
             except Exception:
                 shutil.copy(assembled, pre_wm)
+
+        # ── ENFORCE PLATFORM DURATION LIMIT ────────────────────────────────
+        max_dur = get_max_duration_for_post(post)
+        actual_dur = get_duration(pre_wm)
+        if actual_dur > max_dur:
+            print(f"  ✂️  Trimming {actual_dur:.1f}s → {max_dur}s (platform limit: {post.get('platforms')})")
+            trimmed = str(post_dir / "pre_wm_trimmed.mp4")
+            trim_clip(pre_wm, trimmed, start=0, duration=max_dur)
+            shutil.move(trimmed, pre_wm)
+        else:
+            print(f"  ⏱️  Duration {actual_dur:.1f}s within limit ({max_dur}s) ✅")
 
         # ── WATERMARK ───────────────────────────────────────────────────────
         final_video = str(post_dir / "final.mp4")
