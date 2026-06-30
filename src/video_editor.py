@@ -94,16 +94,18 @@ def grade_video(input_path: str, output_path: str,
                 style: str = "warm_gold") -> str:
     """
     Apply color grading to match La Medusa brand.
-    warm_gold: warm amber tones, slightly dark, high contrast — matches the restaurant aesthetic.
+    warm_gold: warm amber tones, BRIGHT and inviting — matches the restaurant aesthetic
+    without crushing the already dim candlelit footage.
     """
     _check_ffmpeg()
 
     if style == "warm_gold":
-        # Warm amber: boost reds/yellows, reduce blues, slight vignette
+        # Warm amber but bright: lift blacks/shadows, positive brightness, gentle
+        # contrast, keep a warm tint (less blue) without going dark.
         vf = (
-            "curves=r='0/0 0.5/0.58 1/1':g='0/0 0.5/0.50 1/0.95':b='0/0 0.5/0.42 1/0.82',"
-            "eq=brightness=-0.02:contrast=1.08:saturation=1.12,"
-            "unsharp=5:5:0.8:5:5:0"
+            "curves=r='0/0.05 0.5/0.62 1/1':g='0/0.04 0.5/0.56 1/0.97':b='0/0.03 0.5/0.50 1/0.88',"
+            "eq=brightness=0.06:contrast=1.03:saturation=1.10,"
+            "unsharp=5:5:0.6:5:5:0"
         )
     else:
         vf = "eq=brightness=0:contrast=1:saturation=1"
@@ -224,15 +226,17 @@ def merge_video_audio(video_path: str, audio_path: str, output_path: str) -> str
             output_path
         ]
     else:
-        # Video longer than audio — trim to audio
+        # Video longer than audio — KEEP the full video and PAD the audio with
+        # silence so the audio track equals the video length exactly (apad + -shortest
+        # ends precisely at the video). Never trim the video to the short voiceover.
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
             "-i", audio_path,
-            "-t", str(audio_dur),
-            "-filter_complex", "[1:a]loudnorm=I=-14:TP=-2:LRA=11[aout]",
+            "-filter_complex", "[1:a]loudnorm=I=-14:TP=-2:LRA=11,apad[aout]",
             "-map", "0:v",
             "-map", "[aout]",
+            "-shortest",
             "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",

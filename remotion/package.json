@@ -1,0 +1,23 @@
+{
+  "name": "forky-g-remotion",
+  "version": "1.0.0",
+  "description": "Forky-G video editing layer — programmatic, brand-driven reels (replaces basic FFmpeg/PIL editing).",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render",
+    "upgrade": "remotion upgrade"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.484",
+    "@remotion/google-fonts": "4.0.484",
+    "@remotion/transitions": "4.0.484",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "remotion": "4.0.484"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.0",
+    "typescript": "5.5.4"
+  }
+}

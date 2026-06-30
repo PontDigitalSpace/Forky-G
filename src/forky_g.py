@@ -116,6 +116,7 @@ LA_MEDUSA_JUNIO_2026 = [
                 "higgsfield_prompt": "Italian restaurant chef in professional kitchen Montreal, warm lighting, elegant atmosphere, gold and black tones, cinematic vertical 9:16"
             },
         ]
+    },
     {
         "id": 5, "date": "2026-06-12", "time": "07:00",
         "platforms": ["instagram"],
@@ -342,6 +343,28 @@ CONTENT_PLANS = {
     }
 }
 
+# ── Brand context per client (Production Profile) ────────────────────────────
+# Injected into the content-director role so prompts are tailored per client.
+# INTERIM: hardcoded here until the agent reads the Production Profile from the
+# ClickUp brand doc and injects it dynamically. The director ROLE stays generic;
+# only this context changes per client.
+BRAND_CONTEXTS = {
+    "la_medusa": (
+        "Cliente: La Medusa — restaurante italiano premium en Montreal (desde 1996, "
+        "30 aniversario en noviembre 2026). Audiencia: comensales que buscan fine dining "
+        "italiano auténtico. Tono visual: elegante, cálido, íntimo, herencia. "
+        "Colores de marca: dorado #d6b646 y negro profundo #1d1c1a. "
+        "Mood: luz de vela, ambiente de fine dining, sofisticado pero acogedor. "
+        "Datos exactos (usar tal cual, NO inventar): "
+        "sitio web lamedusarestaurant.ca · dirección 1218 Rue Drummond, Montréal · "
+        "teléfono (514) 878-4499 · cerca del Bell Centre · anfitrión/dueño: Joe. "
+        "Platos estrella: pasta hecha a mano, risotto, osso buco, veau marsala, salmón, "
+        "tiramisú. Idioma de publicación: francés. "
+        "Evitar: estética fast-food, tonos fríos, fotos tipo stock, movimientos bruscos, "
+        "inventar platos o datos que no estén aquí."
+    ),
+}
+
 # ── Platform video duration limits (seconds) ─────────────────────────────────
 # Based on 2026 algorithm data: completion rate is the #1 ranking factor.
 # Ideal = sweet spot for engagement. Max = hard cap before trimming.
@@ -358,8 +381,82 @@ def get_max_duration_for_post(post: dict) -> float:
     return min(maxes)  # most restrictive platform wins
 
 
-def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = None) -> dict:
-    """Produce one post: download media, create visuals, generate voiceover."""
+# ── Remotion editing layer (primary) ───────────────────────────────────────
+# Higgsfield still ANIMATES the real footage; Remotion does the EDIT (captions,
+# transitions, branded intro/outro, Ken Burns). FFmpeg stays as the fallback.
+# Toggle off with FORKY_USE_REMOTION=0.
+
+def _remotion_enabled() -> bool:
+    if os.environ.get("FORKY_USE_REMOTION", "1").lower() not in ("1", "true", "yes", "on"):
+        return False
+    try:
+        import remotion_renderer as rr
+        return rr.is_available()
+    except Exception:
+        return False
+
+
+def _brand_for_post(post: dict) -> dict:
+    """Brand props for the Remotion composition (defaults = La Medusa).
+    Later this comes from the client's Production Profile / rules.json."""
+    b = post.get("brand") or {}
+    return {
+        "name": b.get("name", "La Medusa"),
+        "handle": b.get("handle", "lamedusarestaurant.ca"),
+        "primaryColor": b.get("primaryColor", "#d6b646"),
+        "bgColor": b.get("bgColor", "#1d1c1a"),
+        "textColor": b.get("textColor", "#f5f0e8"),
+        "titleFont": b.get("titleFont", "PlayfairDisplay"),
+        "bodyFont": b.get("bodyFont", "Montserrat"),
+    }
+
+
+def _render_reel_remotion(post: dict, post_dir: Path, scene_clips: list,
+                          scenes: list, voiceover: str, out_path: str) -> str:
+    """Assemble the reel with Remotion. Scene durations are scaled to match the
+    voiceover and to keep the whole reel within the platform limit."""
+    import remotion_renderer as rr
+
+    INTRO_S, OUTRO_S = 1.6, 2.4
+    pairs = []
+    for i, clip in enumerate(scene_clips):
+        meta = scenes[i] if i < len(scenes) else {}
+        pairs.append((clip, meta.get("text", "") or "", float(meta.get("duration", 4) or 4)))
+    if not pairs:
+        raise RuntimeError("no scene clips to render")
+
+    base_total = sum(d for _, _, d in pairs) or 1.0
+    max_dur = get_max_duration_for_post(post)
+    avail = max(4.0, max_dur - INTRO_S - OUTRO_S)        # leave room for cards
+    target = avail
+    if voiceover and Path(voiceover).exists():
+        vo = get_duration(voiceover)
+        if vo > 0:
+            target = min(vo, avail)                       # match the voiceover
+    scale = target / base_total
+
+    scenes_job = [
+        {"src": clip, "kind": "video", "duration": max(1.5, d * scale), "text": text}
+        for (clip, text, d) in pairs
+    ]
+    brand = _brand_for_post(post)
+    job = rr.build_job(
+        brand=brand,
+        scenes=scenes_job,
+        voiceover=voiceover if (voiceover and Path(voiceover).exists()) else None,
+        intro={"title": brand["name"], "subtitle": post.get("intro_subtitle", "Depuis 1996")},
+        outro={"title": brand["name"], "cta": post.get("cta_text", "Réservez votre table 🔗")},
+        job_id=f"{post_dir.parent.name}_{post_dir.name}",
+    )
+    return rr.render(job, out_path, log=False)
+
+
+def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = None,
+                 brand_context: str = "", use_scriptwriter: bool = False,
+                 max_scenes: int = None) -> dict:
+    """Produce one post: download media, create visuals, generate voiceover.
+    If use_scriptwriter, the script (scenes) is generated by the scriptwriter role.
+    max_scenes caps the number of scenes (useful for faster/cheaper test runs)."""
     post_id = post["id"]
     fmt = post["format"]
     post_dir.mkdir(parents=True, exist_ok=True)
@@ -451,8 +548,35 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
             with open(index_file) as f:
                 clip_index = json.load(f)
 
-        # Get scenes for this post
+        # Get scenes for this post.
+        # NEW SYSTEM: when use_scriptwriter is on, the agent acts as a professional
+        # scriptwriter and writes the script fresh from the brief (ignoring the old
+        # hardcoded scenes), informed by the REAL footage available in the clip index.
         scenes = post.get("scenes", [])
+        if use_scriptwriter:
+            try:
+                from script_writer import write_script
+                footage = "; ".join(
+                    f"{c.get('subject','?')} ({c.get('setting','?')}, {c.get('mood','?')})"
+                    for c in clip_index.values()
+                ) if clip_index else ""
+                brief = {
+                    "hook": post.get("hook", ""),
+                    "platforms": post.get("platforms", ["instagram"]),
+                    "format": post.get("format", "reel"),
+                    "pilar": post.get("pilar", ""),
+                    "goal": post.get("goal", ""),
+                    "caption_fr": post.get("caption_fr", ""),
+                    "language": "French",
+                    "max_duration": get_max_duration_for_post(post),
+                }
+                script = write_script(brief, brand_context=brand_context,
+                                      available_footage=footage)
+                if script.get("scenes"):
+                    scenes = script["scenes"]
+                    print(f"  📝 Scriptwriter: {len(scenes)} escenas — {script.get('concept','')[:70]}…")
+            except Exception as e:
+                print(f"  ⚠️ Scriptwriter failed ({e}) — using existing/fallback scenes")
         if not scenes:
             # Fallback: 3-scene structure using hook as description
             scenes = [
@@ -460,6 +584,8 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
                 {"description": "restaurant interior warm elegant", "duration": 4, "text": post["hook"]},
                 {"description": "food dish close up plate elegant", "duration": 4, "text": ""},
             ]
+        if max_scenes:
+            scenes = scenes[:max_scenes]
 
         # ── INTRO CARD ──────────────────────────────────────────────────────
         intro_card = str(post_dir / "card_intro.mp4")
@@ -497,12 +623,44 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
                     import shutil as _sh
                     _sh.copy(best["path"], ref_frame)
 
-                # Build cinematic prompt from scene description
-                hf_vid_prompt = scene.get(
-                    "higgsfield_vid_prompt",
-                    f"La Medusa Italian restaurant Montreal, {scene_desc}, "
-                    f"slow cinematic camera movement, warm candlelight, elegant fine dining atmosphere"
-                )
+                # Crop the reference frame to 9:16 so Higgsfield COMPOSES and
+                # generates a vertical (reel-ready) clip instead of landscape.
+                try:
+                    from PIL import Image
+                    _im = Image.open(ref_frame).convert("RGB")
+                    _w, _h = _im.size
+                    _tw = int(_h * 9 / 16)
+                    if _tw <= _w:                       # wide → crop sides
+                        _x = (_w - _tw) // 2
+                        _im.crop((_x, 0, _x + _tw, _h)).save(ref_frame, quality=95)
+                    else:                                # tall → crop top/bottom
+                        _th = int(_w * 16 / 9)
+                        _y = max(0, (_h - _th) // 2)
+                        _im.crop((0, _y, _w, min(_h, _y + _th))).save(ref_frame, quality=95)
+                except Exception as _e:
+                    print(f"     ⚠️ 9:16 crop skipped: {_e}")
+
+                # Build the animation prompt — the agent acts as a professional
+                # video director. ANIMATE mode: describe only camera/light/motion to
+                # apply to the REAL image; never invent new content.
+                hf_vid_prompt = scene.get("higgsfield_vid_prompt")
+                if not hf_vid_prompt:
+                    try:
+                        from content_director import generate_scene_prompts
+                        director = generate_scene_prompts(
+                            scene_desc=scene_desc, brand_context=brand_context,
+                            mode="animate",
+                            platform=post.get("platforms", ["instagram"])[0],
+                            duration=scene_dur, scene_text=scene_text,
+                        )
+                        hf_vid_prompt = director["vid_prompt"]
+                        print(f"     🎥 Director: {hf_vid_prompt[:80]}…")
+                    except Exception as e:
+                        print(f"     ⚠️ Director unavailable ({e}) — using fallback prompt")
+                        hf_vid_prompt = (
+                            f"{scene_desc}, slow cinematic camera movement, "
+                            f"warm cinematic lighting, elegant atmosphere, shallow depth of field"
+                        )
 
                 try:
                     # Upload reference frame to get public URL, then generate cinematic video
@@ -511,7 +669,8 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
                         prompt=hf_vid_prompt,
                         model="higgsfield-ai/dop/standard",
                         start_image_url=frame_url,
-                        duration=scene_dur
+                        duration=scene_dur,
+                        aspect_ratio="9:16"
                     )
                     higgsfield.download_result(vid_job, scene_out)
 
@@ -519,6 +678,14 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
                     graded = str(post_dir / f"graded_{i+1:02d}.mp4")
                     grade_video(scene_out, graded, style="warm_gold")
                     scene_out = graded
+
+                    # Safety net: force 9:16 vertical in case Higgsfield returned landscape
+                    vertical = str(post_dir / f"vert_{i+1:02d}.mp4")
+                    try:
+                        crop_916(scene_out, vertical)
+                        scene_out = vertical
+                    except Exception:
+                        pass
 
                     if scene_text:
                         with_text = str(post_dir / f"scene_text_{i+1:02d}.mp4")
@@ -572,15 +739,27 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
             elif higgsfield:
                 # ❌ No real footage — generate with Higgsfield
                 # Use higgsfield_prompt if defined, otherwise build a cinematic prompt from description
-                hf_img_prompt = scene.get(
-                    "higgsfield_prompt",
-                    f"La Medusa Italian restaurant Montreal, {scene_desc}, warm candlelight, "
-                    f"elegant fine dining, gold and black tones, cinematic 9:16 vertical"
-                )
-                hf_vid_prompt = scene.get(
-                    "higgsfield_vid_prompt",
-                    f"{scene_desc}, slow cinematic camera movement, warm elegant atmosphere"
-                )
+                hf_img_prompt = scene.get("higgsfield_prompt")
+                hf_vid_prompt = scene.get("higgsfield_vid_prompt")
+                if not hf_img_prompt or not hf_vid_prompt:
+                    try:
+                        from content_director import generate_scene_prompts
+                        director = generate_scene_prompts(
+                            scene_desc=scene_desc, brand_context=brand_context,
+                            mode="generate",
+                            platform=post.get("platforms", ["instagram"])[0],
+                            duration=scene_dur, scene_text=scene_text,
+                        )
+                        hf_img_prompt = hf_img_prompt or director["img_prompt"]
+                        hf_vid_prompt = hf_vid_prompt or director["vid_prompt"]
+                        print(f"     🎨 Director (img): {hf_img_prompt[:70]}…")
+                    except Exception as e:
+                        print(f"     ⚠️ Director unavailable ({e}) — using fallback prompts")
+                        hf_img_prompt = hf_img_prompt or (
+                            f"{scene_desc}, cinematic 9:16 vertical, professional photography, "
+                            f"elegant lighting, shallow depth of field")
+                        hf_vid_prompt = hf_vid_prompt or (
+                            f"{scene_desc}, slow cinematic camera movement, elegant atmosphere")
                 print(f"  🤖 Scene {i+1}: no real footage — generating with Higgsfield")
                 print(f"     Prompt: {hf_img_prompt[:80]}…")
                 try:
@@ -635,68 +814,90 @@ def produce_post(post: dict, media_dir: Path, post_dir: Path, logo_path: str = N
             print(f"  ⚠️ Outro card failed: {e}")
             outro_card = None
 
-        # ── ASSEMBLE: [intro] + scenes + [outro] ────────────────────────────
-        all_clips = []
-        if intro_card and Path(intro_card).exists():
-            all_clips.append(intro_card)
-        all_clips.extend(scene_clips)
-        if outro_card and Path(outro_card).exists():
-            all_clips.append(outro_card)
-
-        if len(all_clips) == 1:
-            assembled = all_clips[0]
-        else:
-            assembled = str(post_dir / "assembled.mp4")
-            concat_clips(all_clips, assembled)
-
-        # ── VOICEOVER ───────────────────────────────────────────────────────
+        # ── VOICEOVER (shared by both editors) ──────────────────────────────
+        audio_path = None
         if post.get("voiceover") and post.get("voiceover_text"):
             print(f"  🎙️ Generating French voiceover...")
             audio_path = str(post_dir / "voiceover.mp3")
-            tts.generate_voiceover(
-                text=post["voiceover_text"],
-                output_path=audio_path,
-                lang="fr"
-            )
-            pre_wm = str(post_dir / "pre_wm.mp4")
-            merge_video_audio(assembled, audio_path, pre_wm)
-        else:
-            pre_wm = str(post_dir / "pre_wm.mp4")
             try:
-                normalize_audio(assembled, pre_wm)
-            except Exception:
-                shutil.copy(assembled, pre_wm)
+                tts.generate_voiceover(text=post["voiceover_text"],
+                                       output_path=audio_path, lang="fr")
+            except Exception as e:
+                print(f"  ⚠️ Voiceover failed: {e}")
+                audio_path = None
 
-        # ── ENFORCE PLATFORM DURATION LIMIT ────────────────────────────────
-        max_dur = get_max_duration_for_post(post)
-        actual_dur = get_duration(pre_wm)
-        if actual_dur > max_dur:
-            print(f"  ✂️  Trimming {actual_dur:.1f}s → {max_dur}s (platform limit: {post.get('platforms')})")
-            trimmed = str(post_dir / "pre_wm_trimmed.mp4")
-            trim_clip(pre_wm, trimmed, start=0, duration=max_dur)
-            shutil.move(trimmed, pre_wm)
-        else:
-            print(f"  ⏱️  Duration {actual_dur:.1f}s within limit ({max_dur}s) ✅")
-
-        # ── WATERMARK ───────────────────────────────────────────────────────
         final_video = str(post_dir / "final.mp4")
-        try:
-            add_watermark_to_video(pre_wm, final_video)
-        except Exception as e:
-            print(f"  ⚠️ Watermark failed: {e}")
-            shutil.copy(pre_wm, final_video)
+        used_remotion = False
+
+        # ── PRIMARY EDITOR: Remotion (programmatic, branded edit) ───────────
+        if _remotion_enabled():
+            try:
+                _render_reel_remotion(post, post_dir, scene_clips, scenes,
+                                      audio_path, final_video)
+                used_remotion = True
+                print(f"  🎬 Remotion edit → {final_video}")
+            except Exception as e:
+                print(f"  ⚠️ Remotion edit failed ({e}) — falling back to FFmpeg")
+
+        # ── FALLBACK EDITOR: FFmpeg (the original path) ─────────────────────
+        if not used_remotion:
+            all_clips = []
+            if intro_card and Path(intro_card).exists():
+                all_clips.append(intro_card)
+            all_clips.extend(scene_clips)
+            if outro_card and Path(outro_card).exists():
+                all_clips.append(outro_card)
+
+            if len(all_clips) == 1:
+                assembled = all_clips[0]
+            else:
+                assembled = str(post_dir / "assembled.mp4")
+                concat_clips(all_clips, assembled)
+
+            if audio_path:
+                pre_wm = str(post_dir / "pre_wm.mp4")
+                merge_video_audio(assembled, audio_path, pre_wm)
+            else:
+                pre_wm = str(post_dir / "pre_wm.mp4")
+                try:
+                    normalize_audio(assembled, pre_wm)
+                except Exception:
+                    shutil.copy(assembled, pre_wm)
+
+            # enforce platform duration limit
+            max_dur = get_max_duration_for_post(post)
+            actual_dur = get_duration(pre_wm)
+            if actual_dur > max_dur:
+                print(f"  ✂️  Trimming {actual_dur:.1f}s → {max_dur}s (platform limit: {post.get('platforms')})")
+                trimmed = str(post_dir / "pre_wm_trimmed.mp4")
+                trim_clip(pre_wm, trimmed, start=0, duration=max_dur)
+                shutil.move(trimmed, pre_wm)
+            else:
+                print(f"  ⏱️  Duration {actual_dur:.1f}s within limit ({max_dur}s) ✅")
+
+            # watermark
+            try:
+                add_watermark_to_video(pre_wm, final_video)
+            except Exception as e:
+                print(f"  ⚠️ Watermark failed: {e}")
+                shutil.copy(pre_wm, final_video)
 
         n_scenes = len(scene_clips)
         result["files"].append(final_video)
-        print(f"  ✅ Reel ready: intro + {n_scenes} scenes + outro + watermark → {final_video}")
+        editor = "Remotion" if used_remotion else "FFmpeg"
+        print(f"  ✅ Reel ready ({editor}): {n_scenes} scenes → {final_video}")
 
     return result
 
 
-def run_cycle(client: str, month: str):
-    """Run the full content production cycle for a client/month."""
+def run_cycle(client: str, month: str, only_post: int = None, use_scriptwriter: bool = False):
+    """Run the content production cycle. If only_post is set, produce just that one
+    post (useful for cheap single-post test runs). If use_scriptwriter, scripts are
+    generated by the scriptwriter role instead of the hardcoded scenes."""
     print(f"\n{'='*60}")
     print(f"  🚀 FORKY-G — {client.upper()} — {month.upper()}")
+    if only_post:
+        print(f"  🧪 SINGLE-POST TEST MODE — only post #{only_post}")
     print(f"{'='*60}\n")
 
     # Load content plan
@@ -705,6 +906,13 @@ def run_cycle(client: str, month: str):
         print(f"  ❌ No content plan found for {client}/{month}")
         print(f"  Available: {list(CONTENT_PLANS.keys())}")
         sys.exit(1)
+
+    # Single-post filter
+    if only_post:
+        plan = [p for p in plan if p["id"] == only_post]
+        if not plan:
+            print(f"  ❌ Post #{only_post} not found in {client}/{month}")
+            sys.exit(1)
 
     # Output and media directories
     output_dir = Path("output") / client / month
@@ -720,6 +928,17 @@ def run_cycle(client: str, month: str):
             sync_drive_folder(folder_key, str(local))
         except Exception as e:
             print(f"  ⚠️ Could not sync {folder_key}: {e}")
+
+    # Step 1b: Build the clip index so the "animate real footage" path can work.
+    # (In GitHub Actions this is a separate step; locally we build it here if missing.)
+    index_file = media_dir / "clip_index.json"
+    if not index_file.exists():
+        print("\n🔍 Building clip index (Claude Vision describes each real clip)...\n")
+        try:
+            from clip_indexer import build_index
+            build_index(client, str(media_dir), str(index_file))
+        except Exception as e:
+            print(f"  ⚠️ Could not build clip index: {e} — scenes may fall back to generation")
 
     # Step 2: Look for logo
     logo_path = None
@@ -741,7 +960,9 @@ def run_cycle(client: str, month: str):
         print(f"📌 POST #{post['id']} — {post['hook'][:50]}...")
 
         try:
-            result = produce_post(post, media_dir, post_dir, logo_path)
+            result = produce_post(post, media_dir, post_dir, logo_path,
+                                  brand_context=BRAND_CONTEXTS.get(client, ""),
+                                  use_scriptwriter=use_scriptwriter)
             if result["files"]:
                 success += 1
                 # Save caption
@@ -789,6 +1010,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Forky-G Content Agent")
     parser.add_argument("--client", default="la_medusa")
     parser.add_argument("--month",  default="junio_2026")
+    parser.add_argument("--only", type=int, default=None,
+                        help="Produce only this post id (cheap single-post test)")
+    parser.add_argument("--script", action="store_true",
+                        help="Generate scripts with the scriptwriter role (new system)")
     args = parser.parse_args()
 
-    run_cycle(args.client, args.month)
+    run_cycle(args.client, args.month, only_post=args.only, use_scriptwriter=args.script)

@@ -40,7 +40,7 @@ class HiggsFieldClient:
     def generate_video(self, prompt: str, model: str = VIDEO_MODEL,
                        aspect_ratio: str = "9:16", duration: int = 5,
                        start_image_url: str = None) -> dict:
-        payload = {"prompt": prompt, "duration": duration}
+        payload = {"prompt": prompt, "duration": duration, "aspect_ratio": aspect_ratio}
         if start_image_url:
             payload["image_url"] = start_image_url
         response = requests.post(
@@ -51,26 +51,63 @@ class HiggsFieldClient:
         )
         response.raise_for_status()
         request_id = response.json().get("request_id") or response.json().get("id")
-        return self._poll_request(request_id, timeout=300)
+        # Higgsfield video gen can take 5-9 min under load; poll generously so we
+        # don't give up early and fall back to FFmpeg.
+        return self._poll_request(request_id, timeout=600)
 
     def upload_image(self, image_path: str) -> str:
         """
-        Upload a local image file to a temporary host and return a public URL.
-        Uses 0x0.st — free, no-auth, files retained up to 30 days.
-        Returns the public URL string.
+        Upload a local image and return a public URL for Higgsfield's start image.
+        Tries several no-auth hosts in order so a single host being down (0x0.st was
+        returning 503) never breaks the pipeline. Returns the first working URL.
+        A real browser User-Agent is sent because some hosts block default UAs.
         """
-        with open(image_path, "rb") as f:
-            response = requests.post(
-                "https://0x0.st",
-                files={"file": f},
-                timeout=60
-            )
-        response.raise_for_status()
-        url = response.text.strip()
-        if not url.startswith("http"):
-            raise Exception(f"upload_image: unexpected response: {url}")
-        print(f"  📤 Uploaded frame → {url}")
-        return url
+        import os
+        ua = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
+        fname = os.path.basename(image_path)
+        errors = []
+
+        def _catbox():
+            with open(image_path, "rb") as f:
+                r = requests.post("https://catbox.moe/user/api.php",
+                                  data={"reqtype": "fileupload"},
+                                  files={"fileToUpload": (fname, f)},
+                                  headers=ua, timeout=60)
+            r.raise_for_status()
+            url = r.text.strip()
+            if not url.startswith("http"):
+                raise Exception(f"catbox unexpected: {url[:100]}")
+            return url
+
+        def _zerox():
+            with open(image_path, "rb") as f:
+                r = requests.post("https://0x0.st", files={"file": (fname, f)},
+                                  headers=ua, timeout=60)
+            r.raise_for_status()
+            url = r.text.strip()
+            if not url.startswith("http"):
+                raise Exception(f"0x0.st unexpected: {url[:100]}")
+            return url
+
+        def _tmpfiles():
+            with open(image_path, "rb") as f:
+                r = requests.post("https://tmpfiles.org/api/v1/upload",
+                                  files={"file": (fname, f)}, headers=ua, timeout=60)
+            r.raise_for_status()
+            page = r.json()["data"]["url"]               # https://tmpfiles.org/123/x.jpg
+            return page.replace("tmpfiles.org/", "tmpfiles.org/dl/", 1)  # direct-download URL
+
+        for name, fn in (("catbox.moe", _catbox), ("0x0.st", _zerox), ("tmpfiles.org", _tmpfiles)):
+            try:
+                url = fn()
+                print(f"  📤 Uploaded frame → {url} (via {name})")
+                return url
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+                print(f"  ⚠️ Upload host {name} failed: {e}")
+
+        raise Exception("upload_image: all hosts failed — " + " | ".join(errors))
 
     def get_result_url(self, job: dict) -> str:
         """Extract the public URL from a completed job result."""

@@ -173,67 +173,80 @@ def add_text_overlay_to_video(
     Full-width semi-transparent dark band + large centered gold text.
     Optimized for 1080x1920 vertical (reel) format.
     """
+    # Render the lower-third (band + gold line + text) as a transparent PNG with
+    # PIL, then composite with ffmpeg `overlay`. This avoids the `drawtext` filter,
+    # which isn't compiled into every FFmpeg build (e.g. the user's local Mac).
     r, g, b = _hex_to_rgb(color)
-    hex_color = f"{r:02x}{g:02x}{b:02x}"
 
-    font_path = str(FONT_DIR / "Marcellus-Regular.ttf")
-    has_font  = Path(font_path).exists()
+    # Probe the real video size so the overlay matches exactly.
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", video_path],
+            capture_output=True, text=True)
+        W, H = [int(x) for x in probe.stdout.strip().split(",")[:2]]
+    except Exception:
+        W, H = 1080, 1920
 
-    # Word-wrap text for ~18 chars/line at 76px on 1080px canvas
-    wrapped = textwrap.fill(text, width=18)
-    # FFmpeg drawtext newline
-    ff_text = wrapped.replace("'", "\\'").replace(":", "\\:").replace("\n", "\\n")
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
 
-    band_h = 230  # height of the lower-third band in pixels
+    font_size = 96
+    # Prefer the brand font (Marcellus, installed in production); fall back to an
+    # elegant system serif locally so text never silently shrinks to PIL's tiny
+    # default bitmap font.
+    font = None
+    for fp in [
+        str(FONT_DIR / "Marcellus-Regular.ttf"),
+        "/System/Library/Fonts/Supplemental/Georgia Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Baskerville.ttc",
+        "/System/Library/Fonts/Supplemental/Times New Roman Bold.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ]:
+        try:
+            font = ImageFont.truetype(fp, font_size)
+            break
+        except Exception:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+
+    wrapped = textwrap.fill(text, width=20)
+    lines = wrapped.split("\n")
+    line_h = font_size + 18
+    total_h = line_h * len(lines)
+    pad = 50                                   # padding above/below the text
+    band_h = total_h + pad * 2                 # band sized to actually fit the text
 
     if position == "bottom":
-        band_y  = f"ih-{band_h}"
-        text_y  = f"ih-{band_h - 28}"
+        band_y = H - band_h - 40               # small margin off the bottom edge
     elif position == "center":
-        band_y  = f"(ih-{band_h})/2"
-        text_y  = f"(ih-{band_h})/2+28"
+        band_y = (H - band_h) // 2
     else:  # top
-        band_y  = "50"
-        text_y  = "78"
+        band_y = 60
 
-    drawbox = (
-        f"drawbox=x=0:y={band_y}:w=iw:h={band_h}"
-        f":color=0x1d1c1a@0.75:t=fill"
-    )
+    # Dark band (0.78 alpha) + gold accent line on its top edge.
+    draw.rectangle([0, band_y, W, band_y + band_h], fill=(0x1d, 0x1c, 0x1a, 200))
+    draw.rectangle([0, band_y, W, band_y + 5], fill=(0xd6, 0xb6, 0x46, 235))
 
-    if has_font:
-        drawtext = (
-            f"drawtext=fontfile={font_path}:"
-            f"text='{ff_text}':"
-            f"fontcolor=0x{hex_color}:"
-            f"fontsize=76:"
-            f"x=(w-text_w)/2:"
-            f"y={text_y}:"
-            f"shadowcolor=black:shadowx=3:shadowy=3:"
-            f"line_spacing=10"
-        )
-    else:
-        drawtext = (
-            f"drawtext=text='{ff_text}':"
-            f"fontcolor=0x{hex_color}:"
-            f"fontsize=76:"
-            f"x=(w-text_w)/2:"
-            f"y={text_y}:"
-            f"shadowcolor=black:shadowx=3:shadowy=3"
-        )
+    ty = band_y + pad
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        lw = bbox[2] - bbox[0]
+        tx = (W - lw) // 2
+        draw.text((tx + 3, ty + 3), line, font=font, fill=(0, 0, 0, 255))   # shadow
+        draw.text((tx, ty), line, font=font, fill=(r, g, b, 255))            # gold text
+        ty += line_h
 
-    # Gold accent line above the band
-    gold_line = (
-        f"drawbox=x=0:y={band_y}:w=iw:h=4"
-        f":color=0xd6b646@0.9:t=fill"
-    )
-
-    vf = f"format=yuv420p,{drawbox},{gold_line},{drawtext}"
+    png_path = output_path + ".overlay.png"
+    overlay.save(png_path)
 
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
-        "-vf", vf,
+        "-i", png_path,
+        "-filter_complex", "[0:v]format=yuv420p[v];[v][1:v]overlay=0:0[out]",
+        "-map", "[out]", "-map", "0:a?",
         "-c:v", "libx264", "-crf", "18", "-preset", "fast",
         "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p",
         "-c:a", "copy",
@@ -241,9 +254,13 @@ def add_text_overlay_to_video(
         output_path
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        os.remove(png_path)
+    except Exception:
+        pass
     if result.returncode != 0:
-        raise RuntimeError(f"FFmpeg drawtext failed:\n{result.stderr[-500:]}")
-    print(f"  ✅ Text overlay added → {output_path}")
+        raise RuntimeError(f"FFmpeg overlay failed:\n{result.stderr[-500:]}")
+    print(f"  ✅ Text overlay added (PIL) → {output_path}")
     return output_path
 
 

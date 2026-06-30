@@ -37,6 +37,8 @@ En tu repo → Settings → Secrets → Actions → New repository secret:
 | `ELEVENLABS_API_KEY` | elevenlabs.io/app/settings/api-keys |
 | `DESCRIPT_API_KEY` | web.descript.com/settings |
 | `GDRIVE_FOLDER_ID` | ID de la carpeta raíz del cliente en Drive |
+| `CLICKUP_API_TOKEN` | ClickUp → tu avatar (abajo izq) → **Settings → Apps → API Token** → *Generate* (empieza con `pk_`). Es un token personal; trátalo como secreto. |
+| `CLICKUP_WORKSPACE_ID` | El número en la URL de ClickUp: `https://app.clickup.com/`**`90131122286`**`/...`. El de Pont Digital es **`90131122286`**. |
 
 ### 3. Ejecutar manualmente
 En GitHub → Actions → "Forky G — Monthly Content Cycle" → Run workflow

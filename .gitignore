@@ -1,1 +1,14 @@
+# secrets
 .env
+
+# client media + generated outputs (large binaries — NOT for the code repo)
+src/media/
+src/output/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# os
+.DS_Store

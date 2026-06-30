@@ -1,0 +1,5 @@
+node_modules/
+out/
+public/jobs/
+.props_*.json
+.DS_Store

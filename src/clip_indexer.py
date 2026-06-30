@@ -3,6 +3,7 @@ Clip Indexer — Analyzes client video clips using Claude Vision
 Extracts one frame per clip, describes the content, saves to index.json
 Run once per client to build the clip library.
 """
+from __future__ import annotations
 import os
 import json
 import base64
@@ -190,7 +191,19 @@ def find_best_clip(index: dict, scene_description: str, used_clips: list = None)
     if used_clips is None:
         used_clips = []
 
-    scene_words = set(scene_description.lower().split())
+    # Clips that are really a "photo of a framed photo" / memorabilia wall — they
+    # usually contain visible text and look bad as a cinematic scene. Penalize so
+    # they're only chosen as a last resort.
+    BAD_PHRASES = (
+        "wall display", "framed photograph", "framed photo", "autographed",
+        "signed ", "photo wall", "gallery display", "memorabilia", "poster",
+        "photo display", "picture frame", "framed picture",
+    )
+    # Stop-words too generic to count as a real match (avoid 1-word false positives).
+    STOP = {"a", "an", "the", "of", "with", "and", "in", "on", "at", "to", "or",
+            "restaurant", "interior", "indoor", "view", "shot", "scene", "warm"}
+
+    scene_words = set(scene_description.lower().split()) - STOP
 
     best_clip = None
     best_score = 0
@@ -199,7 +212,6 @@ def find_best_clip(index: dict, scene_description: str, used_clips: list = None)
         if clip_name in used_clips:
             continue
 
-        # Build searchable text from clip metadata
         searchable = " ".join([
             clip_data.get("subject", ""),
             clip_data.get("setting", ""),
@@ -208,15 +220,19 @@ def find_best_clip(index: dict, scene_description: str, used_clips: list = None)
             " ".join(clip_data.get("useful_for", []))
         ]).lower()
 
-        # Score: count matching words
         clip_words = set(searchable.split())
         score = len(scene_words & clip_words)
+
+        # Heavy penalty for photo-of-a-photo / memorabilia clips.
+        if any(p in searchable for p in BAD_PHRASES):
+            score -= 5
 
         if score > best_score:
             best_score = score
             best_clip = {**clip_data, "name": clip_name, "score": score}
 
-    return best_clip if best_score > 0 else None
+    # Require a real (non-trivial) match; otherwise let the caller decide.
+    return best_clip if best_score >= 1 else None
 
 
 if __name__ == "__main__":
