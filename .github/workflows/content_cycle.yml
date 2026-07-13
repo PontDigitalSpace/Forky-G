@@ -19,6 +19,10 @@ on:
         description: 'Month (e.g. junio_2026)'
         required: true
         default: 'junio_2026'
+      resume_run_id:
+        description: 'Resume a paused run (leave empty for a new run)'
+        required: false
+        default: ''
   schedule:
     - cron: '0 14 1 * *'
 
@@ -74,20 +78,32 @@ jobs:
           cd src
           python clip_indexer.py --client "${{ github.event.inputs.client || 'la_medusa' }}" || true
 
-      - name: Run Forky-G content cycle
+      - name: Run Forky-G content cycle (phase runner — gated + live-tracked)
         env:
           ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
           HIGGSFIELD_API_KEY: ${{ secrets.HIGGSFIELD_API_KEY }}
           OPENAI_API_KEY:     ${{ secrets.OPENAI_API_KEY }}
           GDRIVE_FOLDER_ID:   ${{ secrets.GDRIVE_FOLDER_ID }}
           FONT_DIR:           /usr/share/fonts/forky
+          # Live phase tracking + approval gates (brain.pont-digital.ca)
+          BRAIN_PLATFORM_URL: ${{ secrets.BRAIN_PLATFORM_URL }}
+          FORKY_AGENT_KEY:    ${{ secrets.FORKY_AGENT_KEY }}
+          FORKY_GATE_TIMEOUT_MINUTES: '90'
         run: |
           cd src
-          python forky_g.py \
-            --client "${{ github.event.inputs.client || 'la_medusa' }}" \
-            --month  "${{ github.event.inputs.month  || 'junio_2026' }}"
+          RESUME="${{ github.event.inputs.resume_run_id || '' }}"
+          if [ -n "$RESUME" ]; then
+            python phase_runner.py --resume "$RESUME" \
+              --client "${{ github.event.inputs.client || 'la_medusa' }}" \
+              --month  "${{ github.event.inputs.month  || 'junio_2026' }}"
+          else
+            python phase_runner.py \
+              --run-id "gh-${{ github.run_id }}" \
+              --client "${{ github.event.inputs.client || 'la_medusa' }}" \
+              --month  "${{ github.event.inputs.month  || 'junio_2026' }}"
+          fi
           echo "Output files:"
-          find output -type f | sort
+          find output -type f | sort || true
 
       - name: Upload to Google Drive
         if: always()
