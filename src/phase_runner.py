@@ -41,7 +41,40 @@ TIMEOUT_MINUTES = int(os.environ.get("FORKY_GATE_TIMEOUT_MINUTES", "55"))
 def _production(client: str, month: str, only_post: int | None,
                 use_scriptwriter: bool) -> None:
     from forky_g import run_cycle  # lazy: heavy module
+    from platform_client import get_brain_context, observe
+
+    # SELF-LEARNING (read): pull learned rules/experience from the brain and
+    # expose them to the generation prompts (script_writer reads this env).
+    ctx = get_brain_context(query=f"content production rules {client}")
+    if ctx:
+        os.environ["FORKY_BRAIN_CONTEXT"] = ctx
+        print(f"  🧠 brain context injected ({len(ctx)} chars)")
+
     run_cycle(client, month, only_post=only_post, use_scriptwriter=use_scriptwriter)
+
+    # SELF-LEARNING (observe): record each produced post's content-DNA AT
+    # CREATION TIME (vault rule: never re-watch own videos later) + the run
+    # outcome. The platform's hippocampus dedups/filters what sticks.
+    import json as _json
+    from pathlib import Path as _P
+    summary_file = _P("output") / client / month / "cycle_summary.json"
+    if summary_file.exists():
+        s = _json.loads(summary_file.read_text(encoding="utf-8"))
+        items = [{
+            "content": (f"[content-DNA] {client}/{month} post produced: "
+                        f"hook='{p.get('hook', '')[:80]}' "
+                        f"format={p.get('format', '?')} "
+                        f"platforms={p.get('platforms', [])} "
+                        f"files={len(p.get('files', []))}"),
+            "tags": ["content-dna", client, month],
+        } for p in (s.get("posts") or [])]
+        items.append({
+            "content": (f"[run-outcome] {client}/{month}: "
+                        f"{s.get('success', 0)}/{s.get('total', 0)} posts ok "
+                        f"({'all good' if s.get('success') == s.get('total') else 'some failed — check logs'})"),
+            "tags": ["run-outcome", client, month],
+        })
+        observe(items)
 
 
 PHASE_IMPLS: dict[str, object] = {

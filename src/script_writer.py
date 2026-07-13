@@ -135,7 +135,13 @@ def write_script(
         json={
             "model": MODEL,
             "max_tokens": 1500,
-            "system": SYSTEM_PROMPT,
+            # Self-learning: learned rules/experience from the agent's brain
+            # (set by phase_runner via env; empty = behave exactly as before).
+            "system": SYSTEM_PROMPT + (
+                "\n\n# LEARNED KNOWLEDGE (from your brain — apply when relevant)\n"
+                + os.environ["FORKY_BRAIN_CONTEXT"]
+                if os.environ.get("FORKY_BRAIN_CONTEXT") else ""
+            ),
             "messages": [{"role": "user", "content": user_msg}],
         },
         timeout=timeout,

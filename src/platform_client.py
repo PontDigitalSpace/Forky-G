@@ -41,6 +41,56 @@ def is_configured() -> bool:
     return bool(os.environ.get("FORKY_AGENT_KEY", ""))
 
 
+# ---------------------------------------------------------------------------
+# Self-learning loop (v1): READ the brain before creating, OBSERVE after.
+# The platform's hippocampus filters what enters long-term memory (dedup →
+# reinforce, contradiction → pending human review, write caps) — the agent
+# just submits candidates and reads back curated context.
+# ---------------------------------------------------------------------------
+
+def get_brain_context(query: str = "", top_k: int = 8) -> str:
+    """Kernel + active strategies + relevant episodic memories, as ONE text
+    block ready to inject into a generation prompt. '' if unavailable."""
+    if not is_configured():
+        return ""
+    try:
+        r = requests.get(f"{_agent_base()}/context", headers=_headers(),
+                         params={"query": query, "top_k": top_k}, timeout=20)
+        r.raise_for_status()
+        d = r.json()
+        parts = []
+        for label, key in (("CORE DIRECTIVES", "kernel"),
+                           ("LEARNED RULES", "strategies"),
+                           ("RELEVANT EXPERIENCE", "episodic")):
+            rows = d.get(key) or []
+            if rows:
+                parts.append(f"## {label}\n" + "\n".join(
+                    f"- {m.get('content','')}" for m in rows))
+        return "\n\n".join(parts)
+    except Exception as e:  # noqa: BLE001
+        print(f"  ⚠️  brain context unavailable: {e}")
+        return ""
+
+
+def observe(items: list[dict]) -> None:
+    """Submit episodic memory candidates (post-run lessons, content DNA).
+    Each item: {content: str, tags: [..]}. Fire-and-forget."""
+    if not (is_configured() and items):
+        return
+    try:
+        r = requests.post(f"{_agent_base()}/observe", headers=_headers(),
+                          json={"items": items}, timeout=25)
+        r.raise_for_status()
+        res = r.json()
+        stats = {}
+        for it in (res.get("results") or []):
+            s = it.get("status", "?")
+            stats[s] = stats.get(s, 0) + 1
+        print(f"  🧠 observe: {len(items)} candidatos → {stats}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  ⚠️  observe failed: {e}")
+
+
 class PlatformRun:
     """One tracked run. All network errors are caught and printed — tracking
     must never crash the production cycle."""
