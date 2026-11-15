@@ -1,36 +1,57 @@
 """Approval gates — which phases pause for a human. EDIT True/False here.
 
-This is the "simple way to program which steps need approval" (owner request,
-jul 2026). Defaults = the SAME phases that require approval today by manual
-convention (CLAUDE.md): pick a brand identity, approve the monthly plan.
+New monthly cycle (Guillermo, 2026-11-14): the client ALREADY has a brand
+document, so Phase 1 (brand identity) is NEVER run again. The cycle always
+loops like this:
+
+  Análisis (last campaign's data) → Estrategia + Ideas → Plan de contenidos
+  → Scripts → Creación → Programación y publicación → Análisis de fin de mes
+  → (next month) Estrategia…
+
+- Plan de contenidos: the main idea of each post, in order, which goal it
+  targets and the logic/numbers that say it will help reach that goal.
+- Scripts: the full copy + script of EVERY piece in the plan. Nothing is
+  created before the scripts are approved.
 
 A gated phase (True) makes the runner:
   produce the phase's artifact → report 'awaiting_approval' → PAUSE
   → a human clicks Approve/Reject in the platform dashboard → resume/stop.
 
 Per-client overrides go in CLIENT_GATES (only list the phases that differ).
-
-NOTE: the "no AI images when real footage exists" rule is enforced INSIDE the
-production phase (existing pipeline rule), not as a runner gate.
+The brand designer (brand_designer.py, 3 proposals → client picks) still
+exists, but only for NEW clients without a brand; it is not part of this cycle.
 """
 
-# The 6 phases of the Forky-G cycle, in order (CLAUDE.md «El ciclo»).
+# The 7 steps of the monthly cycle, in order.
 PHASES = [
-    "brand_identity",    # 1. Documento de Marca (3 propuestas → cliente elige)
-    "content_strategy",  # 2. Estrategia + ideas
-    "monthly_plan",      # 3. Plan de Contenido Mensual
-    "production",        # 4. Producción de contenido (run_cycle)
-    "publishing",        # 5. Publicación/agendado en Metricool
-    "monthly_report",    # 6. Reporte mensual + análisis
+    "previous_analysis",  # 1. Análisis — data from the previous campaign/month
+    "content_strategy",   # 2. Estrategia + ideas
+    "content_plan",       # 3. Plan de contenidos (ideas, order, goal, logic)
+    "scripts",            # 4. Scripts — copy + guion of every piece
+    "production",         # 5. Creación de contenido (run_cycle)
+    "publishing",         # 6. Programación y publicación
+    "monthly_report",     # 7. Análisis de fin de mes → feeds next strategy
 ]
 
+# Human-readable names (Spanish, as they appear in ClickUp subtasks).
+PHASE_LABELS = {
+    "previous_analysis": "1 · Análisis — datos de la campaña anterior",
+    "content_strategy":  "2 · Estrategia + Ideas",
+    "content_plan":      "3 · Plan de contenidos",
+    "scripts":           "4 · Scripts — copy y guion de cada contenido",
+    "production":        "5 · Creación de contenido",
+    "publishing":        "6 · Programación y publicación",
+    "monthly_report":    "7 · Análisis de fin de mes",
+}
+
 DEFAULT_GATES = {
-    "brand_identity":  True,   # human picks 1 of 3 proposals (today's gate)
-    "content_strategy": False,
-    "monthly_plan":    True,   # approve plan before producing (today's gate)
-    "production":      False,
-    "publishing":      False,  # auto-schedule; flip True to review before posting
-    "monthly_report":  False,
+    "previous_analysis": False,
+    "content_strategy":  False,
+    "content_plan":      True,   # approve the plan before writing scripts
+    "scripts":           True,   # approve scripts before creating anything
+    "production":        False,
+    "publishing":        False,  # flip True to review before posting
+    "monthly_report":    False,
 }
 
 # Per-client overrides, e.g. {"la_medusa": {"publishing": True}}
