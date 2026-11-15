@@ -6,19 +6,23 @@ on:
       client:
         description: 'Client name'
         required: true
-        default: 'la_medusa'
+        default: 'pont_digital'
         type: choice
         options:
+          - pont_digital
           - la_medusa
+          - revues
+          - sound_of_law
+          - dintys
           - scholeia
           - studies_quebec
           - bimpro
           - la_bruja
           - el_kapricho
       month:
-        description: 'Month (e.g. junio_2026)'
+        description: 'Month (e.g. diciembre_2026)'
         required: true
-        default: 'junio_2026'
+        default: 'diciembre_2026'
       resume_run_id:
         description: 'Resume a paused run (leave empty for a new run)'
         required: false
@@ -34,6 +38,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Resolve month (scheduled runs use the current month)
+        run: |
+          M="${{ github.event.inputs.month }}"
+          if [ -z "$M" ]; then
+            MESES=(enero febrero marzo abril mayo junio julio agosto septiembre octubre noviembre diciembre)
+            M="${MESES[$((10#$(TZ=America/Toronto date +%m) - 1))]}_$(TZ=America/Toronto date +%Y)"
+          fi
+          echo "MONTH=$M" >> "$GITHUB_ENV"
+          echo "Month: $M"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -89,18 +103,20 @@ jobs:
           BRAIN_PLATFORM_URL: ${{ secrets.BRAIN_PLATFORM_URL }}
           FORKY_AGENT_KEY:    ${{ secrets.FORKY_AGENT_KEY }}
           FORKY_GATE_TIMEOUT_MINUTES: '90'
+          # ClickUp: month task «Campaña <Mes Año>_<Cliente>» + one subtask per phase
+          CLICKUP_API_TOKEN:  ${{ secrets.CLICKUP_API_TOKEN }}
         run: |
           cd src
           RESUME="${{ github.event.inputs.resume_run_id || '' }}"
           if [ -n "$RESUME" ]; then
             python phase_runner.py --resume "$RESUME" \
               --client "${{ github.event.inputs.client || 'la_medusa' }}" \
-              --month  "${{ github.event.inputs.month  || 'junio_2026' }}"
+              --month  "$MONTH"
           else
             python phase_runner.py \
               --run-id "gh-${{ github.run_id }}" \
               --client "${{ github.event.inputs.client || 'la_medusa' }}" \
-              --month  "${{ github.event.inputs.month  || 'junio_2026' }}"
+              --month  "$MONTH"
           fi
           echo "Output files:"
           find output -type f | sort || true
@@ -111,7 +127,7 @@ jobs:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
           CLIENT="${{ github.event.inputs.client || 'la_medusa' }}"
-          MONTH="${{ github.event.inputs.month || 'junio_2026' }}"
+          MONTH="$MONTH"
           CLIENT_DISPLAY=$(echo "$CLIENT" | sed 's/_/ /g' | awk '{for(i=1;i<=NF;i++) $i=toupper(substr($i,1,1)) substr($i,2)}1')
           OUTPUT_DIR="src/output/$CLIENT/$MONTH"
           if [ -d "$OUTPUT_DIR" ] && [ "$(ls -A $OUTPUT_DIR 2>/dev/null)" ]; then

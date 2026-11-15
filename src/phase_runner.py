@@ -1,4 +1,9 @@
-"""Phase runner — Forky-G's cycle as 6 tracked phases with approval gates.
+"""Phase runner — Forky-G's monthly cycle as 7 tracked phases with approval gates.
+
+Cycle (Guillermo, 2026-11-14): NO Phase 1 — the brand already exists.
+Análisis → Estrategia → Plan de contenidos → Scripts → Creación → Publicación
+→ Análisis de fin de mes. Each run also creates «Campaña <Mes Año>_<Cliente>»
+in ClickUp with one subtask per phase (campaign_tracker.py).
 
 Turns the monthly cycle (CLAUDE.md «El ciclo») into an orchestrated run the
 team can watch live on the platform (brain.pont-digital.ca) and approve at
@@ -28,6 +33,7 @@ import sys
 
 from approval_gates import PHASES, gated_phases
 from platform_client import PlatformRun
+from campaign_tracker import CampaignTracker
 
 POLL_SECONDS = int(os.environ.get("FORKY_GATE_POLL_SECONDS", "30"))
 TIMEOUT_MINUTES = int(os.environ.get("FORKY_GATE_TIMEOUT_MINUTES", "55"))
@@ -78,12 +84,13 @@ def _production(client: str, month: str, only_post: int | None,
 
 
 PHASE_IMPLS: dict[str, object] = {
-    "brand_identity":  None,  # brand_designer.py exists; one-time per client, manual for now
-    "content_strategy": None,
-    "monthly_plan":    None,  # plan lives in ClickUp; approval gate covers review
-    "production":      _production,
-    "publishing":      None,  # metricool scheduling not wired into the runner yet
-    "monthly_report":  None,
+    "previous_analysis": None,  # read last month's data (KPI sheet / Meta API) — manual for now
+    "content_strategy":  None,
+    "content_plan":      None,  # plan doc in Drive; gate covers review
+    "scripts":           None,  # copy + script of every piece; gate covers review
+    "production":        _production,
+    "publishing":        None,  # GHL Social Planner — scheduling not wired into the runner yet
+    "monthly_report":    None,
 }
 
 EXIT_PAUSED = 75    # gate timeout: run stays paused server-side, resume later
@@ -93,13 +100,15 @@ EXIT_REJECTED = 2
 def run_phases(client: str, month: str, run_id: str | None = None,
                only_post: int | None = None, use_scriptwriter: bool = False,
                start_index: int = 1) -> int:
-    """Run phases [start_index..6] (1-based). Returns process exit code."""
+    """Run phases [start_index..7] (1-based). Returns process exit code."""
     gates = set(gated_phases(client))
     run = PlatformRun(run_id)
     if start_index == 1:
         run.start(client=client, label=month, phases=PHASES,
                   gates=[p for p in PHASES if p in gates])
     total = len(PHASES)
+    tracker = CampaignTracker(client, month)
+    tracker.start()
 
     for i, phase in enumerate(PHASES, start=1):
         if i < start_index:
@@ -108,6 +117,7 @@ def run_phases(client: str, month: str, run_id: str | None = None,
         print(f"\n{'='*60}\n  ▶️  PHASE {i}/{total} — {phase}"
               f"{' (manual)' if impl is None else ''}{' 🚧 gated' if phase in gates else ''}")
         run.report(phase, i, "running")
+        tracker.set_phase(phase, "running")
 
         # 1) Do the phase's work (if automated). If the impl returns a string,
         #    that's the phase's ARTIFACT (markdown) — reviewed IN the platform.
@@ -118,6 +128,7 @@ def run_phases(client: str, month: str, run_id: str | None = None,
             except (Exception, SystemExit) as e:  # noqa: BLE001
                 print(f"  ❌ Phase '{phase}' failed: {e}")
                 run.report(phase, i, "failed", error=str(e))
+                tracker.set_phase(phase, "failed", f"falló: {str(e)[:300]}")
                 return 1
         else:
             print(f"  ℹ️  '{phase}' is not automated yet — "
@@ -127,6 +138,8 @@ def run_phases(client: str, month: str, run_id: str | None = None,
         if phase in gates:
             run.report(phase, i, "awaiting_approval",
                        artifact_content=str(artifact))
+            tracker.set_phase(phase, "awaiting_approval",
+                              "lista para revisar: apruébala en brain.pont-digital.ca")
             decision = run.wait_for_approval(phase, POLL_SECONDS, TIMEOUT_MINUTES)
             if decision == "rejected":
                 print(f"  🚫 Run stopped: '{phase}' was rejected.")
@@ -134,8 +147,10 @@ def run_phases(client: str, month: str, run_id: str | None = None,
             if decision == "timeout":
                 return EXIT_PAUSED
             # approved → fall through to next phase
+        tracker.set_phase(phase, "done")
 
     run.report(PHASES[-1], total, "done")
+    tracker.finish()
     print(f"\n✅ Cycle complete — all {total} phases finished.")
     return 0
 
